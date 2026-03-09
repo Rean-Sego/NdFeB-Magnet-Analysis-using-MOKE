@@ -1,0 +1,9 @@
+.venv/
+data
+junk
+outputs
+processed_data
+processed_results
+rast_results
+sc_results
+segment-anything
