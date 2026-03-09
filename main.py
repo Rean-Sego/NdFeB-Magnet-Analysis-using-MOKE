@@ -4,211 +4,370 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
-from scipy.stats import wasserstein_distance
+from skimage.color import rgb2gray
+from skimage.feature import structure_tensor
+from skimage.measure import regionprops
+from scipy.ndimage import distance_transform_edt, gaussian_filter
+from skimage.feature import peak_local_max
+from skimage.segmentation import watershed
+from skimage import exposure
+
+# ==========================================
+# --- CONFIGURATION ---
+# ==========================================
+MICRONS_PER_PIXEL = 0.066  
+ALIGNMENT_THRESHOLD_DEG = 15.0 
+SCALE_BAR_HEIGHT = 180  
+
+# MODEL SETTINGS
+MODEL_TYPE = "vit_b"
+CHECKPOINT_PATH = "segment-anything/assets/models/sam_vit_b_01ec64.pth"
+
+# FOLDERS
+OUTPUT_FOLDER = "processed_results"
+DATA_FOLDER = "processed_data"
+TEST_FOLDER = "data/test_samples"
+MAX_GRAIN_DIAMETER = 50.0 
+
+# ==========================================
+# --- CORE LOGIC ---
+# ==========================================
 
 class GrainSegmenter:
-    def __init__(self, model_type="vit_h", checkpoint_path="assets/models/sam_vit_h_4b8939.pth"):
-        print("--- INITIALIZING AI ---")
-        if not os.path.exists(checkpoint_path):
-            raise FileNotFoundError(f"Model not found at {checkpoint_path}. Did you download it?")
-            
-        print("Loading SAM Model... (this may take 10-20 seconds)")
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        print(f"Using device: {self.device}")
+    def __init__(self, checkpoint_path=CHECKPOINT_PATH):
+        print("--- INITIALIZING AI (V32.0 DUAL-STREAM FUSION) ---")
+        self.device = "cpu"
+        print("WARNING: Using CPU")
         
-        self.sam = sam_model_registry[model_type](checkpoint=checkpoint_path)
+        if not os.path.exists(checkpoint_path):
+            raise FileNotFoundError("Model missing")
+
+        self.sam = sam_model_registry[MODEL_TYPE](checkpoint=checkpoint_path)
         self.sam.to(device=self.device)
         
-        # TUNE THESE KNOBS: Adjusting sensitivity for magnet grains
         self.mask_generator = SamAutomaticMaskGenerator(
             model=self.sam,
-            points_per_side=32,             # Higher = more detail
-            pred_iou_thresh=0.86,           # Confidence threshold (86%)
-            stability_score_thresh=0.92,    # Stability threshold
-            crop_n_layers=1,                # Zoom levels
+            points_per_side=64,             
+            crop_n_layers=1,                
             crop_n_points_downscale_factor=2,
-            min_mask_region_area=100        # Ignore dust/noise < 100 pixels
+            pred_iou_thresh=0.90,           
+            stability_score_thresh=0.92,
+            min_mask_region_area=50  
         )
 
-    def analyze_image(self, image_path, microns_per_pixel=1.0):
-        """Returns a list of grain areas in square microns."""
-        image = cv2.imread(image_path)
-        if image is None:
-            print(f"Error: Could not read {image_path}")
-            return []
+    def process_image_common(self, image):
+        """Helper to Clean and Enhance images."""
+        h, w = image.shape[:2]
+        if w > 2000 or h > 2000:
+            scale = 2000 / max(h, w)
+            new_w, new_h = int(w * scale), int(h * scale)
+            image = cv2.resize(image, (new_w, new_h))
+
+        clean = image.copy()
+        h, w = clean.shape[:2] 
+        clean[h-SCALE_BAR_HEIGHT:h, :] = 0 # Blackout Scale Bar
         
-        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        masks = self.mask_generator.generate(image_rgb)
+        # CLAHE Contrast Boost
+        lab = cv2.cvtColor(clean, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8)) 
+        cl = clahe.apply(l)
+        enhanced = cv2.cvtColor(cv2.merge((cl, a, b)), cv2.COLOR_LAB2BGR)
         
-        grain_areas = []
-        for mask_data in masks:
-            area_pixels = mask_data['area']
-            # Convert pixel area to physical area (microns^2)
-            area_microns = area_pixels * (microns_per_pixel ** 2)
-            grain_areas.append(area_microns)
+        return clean, enhanced
+
+    def align_images_safe(self, img_ref, img_target):
+        """Translation-Only Alignment."""
+        gray_ref = cv2.cvtColor(img_ref, cv2.COLOR_BGR2GRAY)
+        gray_target = cv2.cvtColor(img_target, cv2.COLOR_BGR2GRAY)
+        warp_mode = cv2.MOTION_TRANSLATION
+        warp_matrix = np.eye(2, 3, dtype=np.float32)
+        criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 5000, 1e-10)
+        try:
+            (cc, warp_matrix) = cv2.findTransformECC(gray_ref, gray_target, warp_matrix, warp_mode, criteria)
+            aligned_image = cv2.warpAffine(img_target, warp_matrix, (img_ref.shape[1], img_ref.shape[0]), flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
+            return aligned_image
+        except cv2.error:
+            return img_target
+
+    def get_defect_mask_from_structure(self, struct_img):
+        """
+        STREAM A: Detects Pores and Phases using the clean Structure Image.
+        Returns a mask where 255 = Defect (Bad), 0 = Grain (Good).
+        """
+        gray = cv2.cvtColor(struct_img, cv2.COLOR_BGR2GRAY)
+        
+        # 1. Pores are PITCH BLACK (< 30)
+        _, pores = cv2.threshold(gray, 30, 255, cv2.THRESH_BINARY_INV)
+        
+        # 2. Phases are BRIGHT WHITE (> 230)
+        _, phases = cv2.threshold(gray, 230, 255, cv2.THRESH_BINARY)
+        
+        # 3. Combine
+        defects = cv2.bitwise_or(pores, phases)
+        
+        # 4. Dilate slightly to ensure we cover the edges
+        kernel = np.ones((2,2), np.uint8)
+        defects = cv2.dilate(defects, kernel, iterations=1)
+        
+        return defects
+
+    def get_boundary_barrier(self, struct_img):
+        """
+        Creates a 'Barrier Map' from grain boundaries in the structure image.
+        Used to stop Watershed from cutting through grains.
+        """
+        gray = cv2.cvtColor(struct_img, cv2.COLOR_BGR2GRAY)
+        # Invert: Boundaries are dark, so inverted they become bright "walls"
+        edges = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                      cv2.THRESH_BINARY_INV, 11, 2)
+        return edges
+
+    def apply_guided_watershed(self, mask, boundary_barrier):
+        """
+        V32.0: GUIDED WATERSHED.
+        Uses the Structure Image boundaries to guide the cuts.
+        """
+        # 1. Distance Transform on the Mask
+        dist = distance_transform_edt(mask)
+        
+        # 2. V32 KEY: Subtract the physical boundaries from the distance map
+        # This creates "valleys" where the real grain boundaries are.
+        # We normalize the barrier to be 0-1 and subtract it.
+        barrier_norm = boundary_barrier.astype(float) / 255.0
+        dist = dist - (barrier_norm * 5.0) # Weight the barrier heavily
+        
+        dist = gaussian_filter(dist, sigma=1.0) # Smooth out noise
+        
+        # 3. Find Peaks
+        coords = peak_local_max(dist, min_distance=10, labels=mask)
+        
+        mask_bool = mask.astype(bool)
+        markers = np.zeros(dist.shape, dtype=int)
+        for i, coord in enumerate(coords):
+            markers[tuple(coord)] = i + 1
             
-        return grain_areas
+        if len(coords) <= 1: return [mask]
 
-    def save_visualization(self, image_path, output_path):
-        """Generates masks and saves an image with colorful outlines overlaid."""
-        print(f"Generating visual overlay for {os.path.basename(image_path)}...")
-        
-        image = cv2.imread(image_path)
-        if image is None: 
-            print("Image not found for visualization.")
-            return
+        labels = watershed(-dist, markers, mask=mask_bool)
+        new_masks = []
+        for i in range(1, labels.max() + 1):
+            split_mask = (labels == i).astype(np.uint8)
+            if np.sum(split_mask) > 50: 
+                new_masks.append(split_mask)
+        return new_masks
 
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        masks = self.mask_generator.generate(image)
+    def remove_overlapping_masks(self, raw_masks):
+        """Strict IoU NMS to remove duplicates."""
+        sorted_masks = sorted(raw_masks, key=lambda x: x['stability_score'], reverse=True)
+        keep_masks = []
         
-        # Setup plot
-        plt.figure(figsize=(10, 10))
-        plt.imshow(image)
-        
-        # Sort masks by area (largest first) so small ones aren't hidden
-        sorted_masks = sorted(masks, key=(lambda x: x['area']), reverse=True)
-        
-        ax = plt.gca()
-        ax.set_autoscale_on(False)
+        for i, current in enumerate(sorted_masks):
+            curr_mask = current['segmentation']
+            curr_area = np.sum(curr_mask)
+            if curr_area == 0: continue
 
-        # Draw each mask with a random color
-        for mask_data in sorted_masks:
-            m = mask_data['segmentation']
-            img = np.ones((m.shape[0], m.shape[1], 3))
-            color_mask = np.random.random((1, 3)).tolist()[0]
-            for i in range(3):
-                img[:,:,i] = color_mask[i]
-            
-            # Overlay with transparency (alpha = 0.35)
-            ax.imshow(np.dstack((img, m*0.35)))
-        
-        plt.axis('off')
-        plt.savefig(output_path, bbox_inches='tight', pad_inches=0)
-        plt.close() # Free up memory
-        print(f"Saved visualization to: {output_path}")
-
-class MagnetGrader:
-    def __init__(self, segmenter):
-        self.segmenter = segmenter
-        self.reference_profiles = {} # Stores avg grain size for A, B, C, D
-
-    def learn_grade(self, grade_name, folder_path):
-        """Ingests all images in a folder to build a master profile for that grade."""
-        print(f"--- Learning Grade {grade_name} from {folder_path} ---")
-        
-        if not os.path.exists(folder_path):
-            print(f"Skipping Grade {grade_name}: Folder not found.")
-            return
-
-        all_areas = []
-        valid_extensions = {".jpg", ".png", ".tif", ".tiff", ".jpeg"}
-        
-        files = [f for f in os.listdir(folder_path) if any(f.lower().endswith(ext) for ext in valid_extensions)]
-        
-        if len(files) == 0:
-            print(f"Warning: No images found in {folder_path}")
-            return
-
-        for filename in files:
-            filepath = os.path.join(folder_path, filename)
-            # print(f"  Processing: {filename}") # Uncomment to see every file
-            areas = self.segmenter.analyze_image(filepath)
-            all_areas.extend(areas)
-        
-        if not all_areas:
-            print(f"Error: No grains detected in Grade {grade_name}.")
-            return
-
-        # Calculate Median Equivalent Circle Diameter (ECD)
-        # Formula: d = 2 * sqrt(Area / Pi)
-        ecds = [2 * np.sqrt(a / np.pi) for a in all_areas]
-        avg_ecd = np.median(ecds)
-        
-        self.reference_profiles[grade_name] = {
-            "avg_ecd": avg_ecd,
-            "raw_data": ecds
-        }
-        print(f"SUCCESS: Grade {grade_name} Learned. Median Grain Size: {avg_ecd:.2f} microns (based on {len(all_areas)} grains)\n")
-
-    def grade_sample(self, image_path):
-        """Compares a new image against the learned grades."""
-        print(f"--- Grading Sample: {os.path.basename(image_path)} ---")
-        if not os.path.exists(image_path):
-            print("Error: Test image not found.")
-            return
-
-        areas = self.segmenter.analyze_image(image_path)
-        if not areas:
-            print("Error: No grains found in test image.")
-            return
-
-        sample_ecds = [2 * np.sqrt(a / np.pi) for a in areas]
-        sample_avg = np.median(sample_ecds)
-        
-        print(f"Sample Median Grain Size: {sample_avg:.2f} microns")
-        
-        # Sort grades by size to determine ranking
-        sorted_grades = sorted(self.reference_profiles.items(), key=lambda x: x[1]['avg_ecd'])
-        
-        lower_than = []
-        higher_than = []
-        
-        print("\n--- Detailed Comparison ---")
-        for name, data in sorted_grades:
-            ref_size = data['avg_ecd']
-            # Wasserstein Distance: 0 = Identical, Higher = More different
-            dist = wasserstein_distance(sample_ecds, data['raw_data'])
-            
-            print(f"Vs Grade {name} ({ref_size:.2f} µm): Dist Score = {dist:.2f}")
-            
-            if sample_avg > ref_size:
-                higher_than.append(name)
-            else:
-                lower_than.append(name)
+            is_duplicate = False
+            for kept in keep_masks:
+                kept_mask = kept['segmentation']
+                intersection = np.logical_and(curr_mask, kept_mask)
+                inter_area = np.sum(intersection)
+                if inter_area == 0: continue
                 
-        # Final Output Logic
-        print("\n--- FINAL VERDICT ---")
-        if not higher_than:
-            print(f"RESULT: Sample is finer (smaller) than all reference grades.")
-        elif not lower_than:
-            print(f"RESULT: Sample is coarser (larger) than all reference grades.")
-        else:
-            print(f"RESULT: Sample is larger than {', '.join(higher_than)} but smaller than {', '.join(lower_than)}.")
+                overlap_ratio = inter_area / curr_area
+                if overlap_ratio > 0.40: 
+                    is_duplicate = True
+                    break
+            
+            if not is_duplicate:
+                keep_masks.append(current)
+        return keep_masks
 
-# --- EXECUTION BLOCK ---
-if __name__ == "__main__":
-    # 1. Initialize System
-    segmenter = GrainSegmenter(checkpoint_path="assets/models/sam_vit_h_4b8939.pth")
-    grader = MagnetGrader(segmenter)
-    
-    # 2. Learn from your Reference Folders
-    # The grader learns what A, B, C, and D look like
-    grader.learn_grade("A", "data/grade_N35")
-    grader.learn_grade("B", "data/grade_N42")
-    grader.learn_grade("C", "data/grade_N48")
-    grader.learn_grade("D", "data/grade_N52")
-    
-    # 3. Process ALL images in the test_samples folder
-    test_folder = "data/test_samples"
-    valid_extensions = {".jpg", ".png", ".tif", ".tiff", ".jpeg"}
-    
-    # Get a list of all valid images in the folder
-    test_files = [f for f in os.listdir(test_folder) if any(f.lower().endswith(ext) for ext in valid_extensions)]
-    
-    if not test_files:
-        print(f"No test images found in {test_folder}")
-    else:
-        print(f"\nFound {len(test_files)} test images. Starting analysis...\n")
+    def classify_grains_hybrid(self, grain_data_list):
+        if not grain_data_list: return []
+
+        textures = [g['texture'] for g in grain_data_list]
+        median_texture = np.median(textures)
+        texture_threshold = max(2.5, median_texture * 0.35)
         
-        for filename in test_files:
-            # Construct the full path to the image
-            image_path = os.path.join(test_folder, filename)
+        print(f"    -> Hybrid Logic: Median Tex={median_texture:.2f} | Cutoff={texture_threshold:.2f}")
+
+        magnetic_count = 0
+        for g in grain_data_list:
+            is_textured = g['texture'] >= texture_threshold
+            is_gray = 40 < g['brightness'] < 230
             
-            # Run the grading logic
-            print(f"--- STARTING NEW TEST: {filename} ---")
-            grader.grade_sample(image_path)
+            if is_textured or is_gray:
+                g['type'] = 'magnetic'
+                magnetic_count += 1
+            else:
+                g['type'] = 'non_magnetic'
+        
+        print(f"    -> Result: {magnetic_count} Magnets | {len(grain_data_list) - magnetic_count} Non-Magnets")
+        return grain_data_list
+
+    def analyze_pair(self, struct_path, polar_path):
+        print(f"  [1/4] Loading & Preprocessing...")
+        img_struct = cv2.imread(struct_path)
+        img_polar = cv2.imread(polar_path)
+        if img_struct is None or img_polar is None: return None, None, None
+
+        clean_struct, enhanced_struct = self.process_image_common(img_struct)
+        clean_polar, _ = self.process_image_common(img_polar)
+        
+        print(f"  [2/4] Aligning...")
+        clean_polar = self.align_images_safe(clean_struct, clean_polar)
+
+        # --- STREAM A: DEFECT DETECTION (Structure) ---
+        print(f"  [3/4] Building Defect Map from Structure...")
+        defect_mask = self.get_defect_mask_from_structure(clean_struct)
+        boundary_barrier = self.get_boundary_barrier(clean_struct)
+
+        # --- STREAM B: GRAIN DETECTION (Polar/High-Contrast) ---
+        print(f"  [4/4] Running AI on Polar Image (Guided)...")
+        # Use Polar for segmentation as it shows domains best
+        masks = self.mask_generator.generate(cv2.cvtColor(clean_polar, cv2.COLOR_BGR2RGB))
+        
+        print(f"        -> Found {len(masks)} candidates. De-duplicating...")
+        masks = self.remove_overlapping_masks(masks)
+        
+        gray_polar = cv2.cvtColor(clean_polar, cv2.COLOR_BGR2GRAY)
+        temp_data_list = []
+        
+        total_image_area = clean_struct.shape[0] * clean_struct.shape[1]
+
+        for mask_data in masks:
+            raw_mask = mask_data['segmentation'].astype(np.uint8)
+            mask_area = np.sum(raw_mask)
             
-            # Generate the visual proof (saved with the original filename prefix)
-            output_name = f"visual_result_{filename}"
-            segmenter.save_visualization(image_path, output_name)
-            print(f"--------------------------------------\n")
+            # 1. Filter Massive Background Masks
+            if mask_area > (total_image_area * 0.05): continue
+
+            # 2. Subtract Defects (Pores/Phases)
+            clean_mask = cv2.bitwise_and(raw_mask, cv2.bitwise_not(defect_mask))
+            
+            # 3. Guided Watershed Split
+            # Use the structure boundaries to force cuts in the right places
+            split_masks = self.apply_guided_watershed(clean_mask, boundary_barrier)
+            
+            for sub_mask in split_masks:
+                if np.count_nonzero(sub_mask) < 30: continue 
+
+                masked_polar_pixels = gray_polar[sub_mask > 0]
+                if len(masked_polar_pixels) == 0: continue
+
+                texture = np.std(masked_polar_pixels)
+                brightness = np.mean(masked_polar_pixels)
+                
+                area_microns = np.count_nonzero(sub_mask) * (MICRONS_PER_PIXEL**2)
+                diameter = 2 * np.sqrt(area_microns / np.pi)
+                
+                grain_item = {
+                    "mask": sub_mask,
+                    "texture": texture,
+                    "brightness": brightness,
+                    "diameter": diameter,
+                    "misalignment": 0, 
+                    "type": "unknown" 
+                }
+                temp_data_list.append(grain_item)
+
+        classified_data = self.classify_grains_hybrid(temp_data_list)
+        
+        final_grain_data = []
+        for g in classified_data:
+            if g['type'] == 'magnetic':
+                moke = cv2.bitwise_and(clean_polar, clean_polar, mask=g['mask'])
+                st = structure_tensor(cv2.cvtColor(moke, cv2.COLOR_BGR2GRAY), sigma=1)
+                angles = 0.5 * np.arctan2(2 * st[1], st[0] - st[2])
+                valid = angles[g['mask'] > 0]
+                
+                if len(valid) > 0:
+                    stripe_angle = np.degrees(np.median(valid))
+                    grain_angle = np.degrees(regionprops(g['mask'])[0].orientation)
+                    misalign = abs(grain_angle - stripe_angle) % 90
+                    if misalign > 45: misalign = 90 - misalign
+                    g['misalignment'] = misalign
+            
+            final_grain_data.append(g)
+
+        return clean_struct, clean_polar, final_grain_data
+
+class GrainInspector:
+    def __init__(self, image_path, data_path, filename):
+        self.grain_data = np.load(data_path, allow_pickle=True)
+        self.image = cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_BGR2RGB)
+        
+        h, w = self.image.shape[:2]
+        if SCALE_BAR_LOCATION == "bottom-right": self.image[h-SCALE_BAR_HEIGHT:h, w-SCALE_BAR_WIDTH:w] = 0
+        elif SCALE_BAR_LOCATION == "bottom-left": self.image[h-SCALE_BAR_HEIGHT:h, 0:SCALE_BAR_WIDTH] = 0
+        
+        self.fig, self.ax = plt.subplots(figsize=(10, 10))
+        self.fig.canvas.mpl_connect('button_press_event', self.on_click)
+        self.redraw()
+        plt.show()
+
+    def redraw(self):
+        self.ax.clear()
+        self.ax.imshow(self.image)
+        self.ax.axis('off')
+        overlay = np.zeros_like(self.image)
+        for g in self.grain_data:
+            if g['type'] == 'non_magnetic':
+                color = (255, 255, 0) # YELLOW
+            else:
+                color = (0, 255, 0) if g['misalignment'] < ALIGNMENT_THRESHOLD_DEG else (255, 0, 0)
+            
+            cv2.drawContours(overlay, [cv2.findContours(g['mask'], cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0][0]], -1, color, 2)
+        self.ax.imshow(overlay, alpha=0.6)
+
+    def on_click(self, event):
+        if not event.xdata: return
+        x, y = int(event.xdata), int(event.ydata)
+        for g in self.grain_data:
+            if g['mask'][y, x]:
+                if g['type'] == 'non_magnetic':
+                    self.ax.set_title(f"Non-Magnetic (Tex: {g['texture']:.1f})")
+                else:
+                    d, a = g['diameter'], g['misalignment']
+                    status = "ALIGNED" if a < ALIGNMENT_THRESHOLD_DEG else "MISALIGNED"
+                    self.ax.set_title(f"Dia: {d:.2f}µm | Misalign: {a:.1f}° | {status}")
+                self.fig.canvas.draw()
+                return
+
+if __name__ == "__main__":
+    print("\n!!! RUNNING VERSION 32.0 (DUAL-STREAM FUSION) !!!")
+    
+    os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+    os.makedirs(DATA_FOLDER, exist_ok=True)
+    
+    seg = GrainSegmenter()
+    
+    struct_files = [f for f in os.listdir(TEST_FOLDER) if "_struct" in f]
+    print(f"Found {len(struct_files)} Test Pairs.")
+    
+    for f in struct_files:
+        f_polar = f.replace("_struct", "_polar")
+        path_s = os.path.join(TEST_FOLDER, f)
+        path_p = os.path.join(TEST_FOLDER, f_polar)
+        
+        if not os.path.exists(path_p): continue
+        
+        print(f"Analyzing {f}...")
+        img, processed_polar, data = seg.analyze_pair(path_s, path_p)
+        
+        if data:
+            np.save(os.path.join(DATA_FOLDER, f + ".npy"), data)
+            
+            vis = processed_polar.copy()
+            for g in data:
+                if g['type'] == 'non_magnetic':
+                    color = (0, 255, 255) # Yellow
+                else:
+                    color = (0, 255, 0) if g['misalignment'] < ALIGNMENT_THRESHOLD_DEG else (0, 0, 255)
+                
+                cnt = cv2.findContours(g['mask'], cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
+                cv2.drawContours(vis, cnt, -1, color, 2)
+                
+            cv2.imwrite(os.path.join(OUTPUT_FOLDER, f"Result_{f}.png"), vis)
+            print(f"  -> Saved Result to {OUTPUT_FOLDER}/Result_{f}.png")
