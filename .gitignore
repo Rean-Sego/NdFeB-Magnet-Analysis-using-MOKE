@@ -1,9 +1,15 @@
 .venv/
 data
+<<<<<<< HEAD
 junk
 outputs
 processed_data
 processed_results
 rast_results
 sc_results
+=======
+outputs
+processed_data
+processed_results
+>>>>>>> 1c1d6593 (Updating gitignore)
 segment-anything
