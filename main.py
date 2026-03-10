@@ -17,7 +17,7 @@ from skimage import exposure
 # ==========================================
 MICRONS_PER_PIXEL = 0.066  
 ALIGNMENT_THRESHOLD_DEG = 15.0 
-SCALE_BAR_HEIGHT = 180  
+SCALE_BAR_HEIGHT = 180  #How much of the bottom of the image is cropped
 
 # MODEL SETTINGS
 MODEL_TYPE = "vit_b"
@@ -45,7 +45,7 @@ class GrainSegmenter:
         self.sam = sam_model_registry[MODEL_TYPE](checkpoint=checkpoint_path)
         self.sam.to(device=self.device)
         
-        self.mask_generator = SamAutomaticMaskGenerator(
+        self.mask_generator = SamAutomaticMaskGenerator(  #Variables to how the prompt points and boxes are made
             model=self.sam,
             points_per_side=64,             
             crop_n_layers=1,                
@@ -58,12 +58,12 @@ class GrainSegmenter:
     def process_image_common(self, image):
         """Helper to Clean and Enhance images."""
         h, w = image.shape[:2]
-        if w > 2000 or h > 2000:
+        if w > 2000 or h > 2000:            #Downsize large images
             scale = 2000 / max(h, w)
             new_w, new_h = int(w * scale), int(h * scale)
             image = cv2.resize(image, (new_w, new_h))
 
-        clean = image.copy()
+        clean = image.copy()                #Crop out scale bar
         h, w = clean.shape[:2] 
         clean[h-SCALE_BAR_HEIGHT:h, :] = 0 # Blackout Scale Bar
         
@@ -76,7 +76,7 @@ class GrainSegmenter:
         
         return clean, enhanced
 
-    def align_images_safe(self, img_ref, img_target):
+    def align_images_safe(self, img_ref, img_target): #This is aligning the images? I am not sure why? I am not sure how this helps. Internsity of MOKE and Non MOKE wont be similar
         """Translation-Only Alignment."""
         gray_ref = cv2.cvtColor(img_ref, cv2.COLOR_BGR2GRAY)
         gray_target = cv2.cvtColor(img_target, cv2.COLOR_BGR2GRAY)
@@ -98,21 +98,21 @@ class GrainSegmenter:
         gray = cv2.cvtColor(struct_img, cv2.COLOR_BGR2GRAY)
         
         # 1. Pores are PITCH BLACK (< 30)
-        _, pores = cv2.threshold(gray, 30, 255, cv2.THRESH_BINARY_INV)
+        _, pores = cv2.threshold(gray, 30, 255, cv2.THRESH_BINARY_INV)  #Below 30 becomes white, makes pores white
         
         # 2. Phases are BRIGHT WHITE (> 230)
-        _, phases = cv2.threshold(gray, 230, 255, cv2.THRESH_BINARY)
+        _, phases = cv2.threshold(gray, 230, 255, cv2.THRESH_BINARY) #Above 230 becomes White, makes crystals white
         
         # 3. Combine
         defects = cv2.bitwise_or(pores, phases)
         
-        # 4. Dilate slightly to ensure we cover the edges
+        # 4. Dilate slightly to ensure we cover the edges     (Will increase the outer edges to be white by 2 pxiels, to help clean up super sharp changes)
         kernel = np.ones((2,2), np.uint8)
         defects = cv2.dilate(defects, kernel, iterations=1)
         
         return defects
 
-    def get_boundary_barrier(self, struct_img):
+    def get_boundary_barrier(self, struct_img):         #Needed for watersheding. You want the grain edges to be detected, this keeps the segmenting from cutting the images down the middle.
         """
         Creates a 'Barrier Map' from grain boundaries in the structure image.
         Used to stop Watershed from cutting through grains.
@@ -335,7 +335,7 @@ class GrainInspector:
                 self.fig.canvas.draw()
                 return
 
-if __name__ == "__main__":
+if __name__ == "__main__":              #Code Proper
     print("\n!!! RUNNING VERSION 32.0 (DUAL-STREAM FUSION) !!!")
     
     os.makedirs(OUTPUT_FOLDER, exist_ok=True)
@@ -370,4 +370,4 @@ if __name__ == "__main__":
                 cv2.drawContours(vis, cnt, -1, color, 2)
                 
             cv2.imwrite(os.path.join(OUTPUT_FOLDER, f"Result_{f}.png"), vis)
-            print(f"  -> Saved Result to {OUTPUT_FOLDER}/Result_{f}.png")
+            print(f"  -> Saved Result to {OUTPUT_FOLDER}/Result_{f}.png")   
