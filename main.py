@@ -27,6 +27,7 @@ CHECKPOINT_PATH = "segment-anything/assets/models/sam_vit_b_01ec64.pth"
 OUTPUT_FOLDER = "processed_results"
 DATA_FOLDER = "processed_data"
 TEST_FOLDER = "data/test_samples"
+SC_Folder = "sc_results"
 MAX_GRAIN_DIAMETER = 50.0 
 
 # ==========================================
