@@ -66,7 +66,7 @@ class GrainSegmenter:
 
         clean = image.copy()                #Crop out scale bar
         h, w = clean.shape[:2] 
-        clean[h-SCALE_BAR_HEIGHT:h, :] = 0 # Blackout Scale Bar
+        clean = clean[:h-SCALE_BAR_HEIGHT, :] # Remove Scale Bar
         
         # CLAHE Contrast Boost
         lab = cv2.cvtColor(clean, cv2.COLOR_BGR2LAB)
@@ -341,7 +341,9 @@ if __name__ == "__main__":              #Code Proper
     
     os.makedirs(OUTPUT_FOLDER, exist_ok=True)
     os.makedirs(DATA_FOLDER, exist_ok=True)
-    
+    os.makedirs(SC_Folder, exist_ok=True)
+
+
     seg = GrainSegmenter()
     
     struct_files = [f for f in os.listdir(TEST_FOLDER) if "_struct" in f]
@@ -356,8 +358,55 @@ if __name__ == "__main__":              #Code Proper
         
         print(f"Analyzing {f}...")
         img, processed_polar, data = seg.analyze_pair(path_s, path_p)
+
         
         if data:
+
+             # --- 3x3 patch sorting begin ---
+            h, w = processed_polar.shape[:2]
+            patch_w = w / 4
+            patch_h = h / 4
+
+            def patch_sort_key(g):
+                ys, xs = np.where(g['mask'] > 0)
+                cy = np.mean(ys)
+                cx = np.mean(xs)
+
+                patch_row = int(cy // patch_h)
+                patch_col = int(cx // patch_w)
+
+                return (patch_row, patch_col, cx)
+
+            data = sorted(data, key=patch_sort_key)
+
+            # --- QC image: Draw Patches Begin Comment out ---
+            qc_img = processed_polar.copy()
+
+            line_color = (255, 255, 255)  # white
+            line_thickness = 2
+
+            x1 = int(patch_w)
+            x2 = int(2 * patch_w)
+            x3 = int(3 * patch_w)
+            y1 = int(patch_h)
+            y2 = int(2 * patch_h)
+            y3 = int(3 * patch_h)
+
+            cv2.line(qc_img, (x1, 0), (x1, h), line_color, line_thickness)
+            cv2.line(qc_img, (x2, 0), (x2, h), line_color, line_thickness)
+            cv2.line(qc_img, (x3, 0), (x3, h), line_color, line_thickness)
+            cv2.line(qc_img, (0, y1), (w, y1), line_color, line_thickness)
+            cv2.line(qc_img, (0, y2), (w, y2), line_color, line_thickness)
+            cv2.line(qc_img, (0, y3), (w, y3), line_color, line_thickness)
+
+
+            qc_filename = f"{os.path.splitext(f)[0]}_patch_qc.png"
+            cv2.imwrite(os.path.join(SC_Folder, qc_filename), qc_img)
+            # --- QC image: Draw Patches End Comment out ---
+
+
+
+            # --- More Main Code Stuff --
             np.save(os.path.join(DATA_FOLDER, f + ".npy"), data)
             
             vis = processed_polar.copy()
@@ -371,4 +420,28 @@ if __name__ == "__main__":              #Code Proper
                 cv2.drawContours(vis, cnt, -1, color, 2)
                 
             cv2.imwrite(os.path.join(OUTPUT_FOLDER, f"Result_{f}.png"), vis)
-            print(f"  -> Saved Result to {OUTPUT_FOLDER}/Result_{f}.png")   
+            print(f"  -> Saved Result to {OUTPUT_FOLDER}/Result_{f}.png")
+
+            # ---Grain Cutout to png ---
+            base_name = os.path.splitext(f)[0] 
+
+            for i, g in enumerate(data):
+                mask_u8 = (g['mask'].astype(np.uint8) * 255)
+
+                coords = cv2.findNonZero(mask_u8)
+                if coords is None:
+                    continue
+
+                x, y, w, h = cv2.boundingRect(coords)
+
+                grain_cutout = np.zeros((h, w, 3), dtype=np.uint8)
+                cropped_img = processed_polar[y:y+h, x:x+w]
+                cropped_mask = mask_u8[y:y+h, x:x+w]
+
+                grain_cutout[cropped_mask > 0] = cropped_img[cropped_mask > 0]
+
+                grain_filename = f"{base_name}_grain_{i:04d}.png"
+                cv2.imwrite(os.path.join(SC_Folder, grain_filename), grain_cutout)   
+
+
+
