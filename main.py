@@ -441,7 +441,8 @@ if __name__ == "__main__":              #Code Proper
                 grain_cutout[cropped_mask > 0] = cropped_img[cropped_mask > 0]
 
                 grain_filename = f"{base_name}_grain_{i:04d}.png"
+                mask_filename  = f"{base_name}_grain_{i:04d}_mask.png"
                 cv2.imwrite(os.path.join(SC_Folder, grain_filename), grain_cutout)   
-
+                cv2.imwrite(os.path.join(SC_Folder, mask_filename), cropped_mask)
 
 
