@@ -4,11 +4,8 @@ junk
 outputs
 processed_data
 processed_results
-<<<<<<< HEAD
 rast_results
 sc_results
 segment-anything
-=======
 segment-anything
 sc_results
->>>>>>> 9e14b6c0 (Add Single Crystal Output Folder to the gitignore)
