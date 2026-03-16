@@ -207,7 +207,7 @@ class GrainSegmenter:
         print(f"    -> Result: {magnetic_count} Magnets | {len(grain_data_list) - magnetic_count} Non-Magnets")
         return grain_data_list
 
-    def analyze_pair(self, struct_path, polar_path):
+    def analyze_pair(self, struct_path, polar_path):    ## 1) Cleans & aligns the image up; 2) outputs sam as "mask"
         print(f"  [1/4] Loading & Preprocessing...")
         img_struct = cv2.imread(struct_path)
         img_polar = cv2.imread(polar_path)
@@ -227,7 +227,7 @@ class GrainSegmenter:
         # --- STREAM B: GRAIN DETECTION (Polar/High-Contrast) ---
         print(f"  [4/4] Running AI on Polar Image (Guided)...")
         # Use Polar for segmentation as it shows domains best
-        masks = self.mask_generator.generate(cv2.cvtColor(clean_polar, cv2.COLOR_BGR2RGB))
+        masks = self.mask_generator.generate(cv2.cvtColor(clean_polar, cv2.COLOR_BGR2RGB))           ###THIS RUNS SAM ON MOKE IMAGE
         
         print(f"        -> Found {len(masks)} candidates. De-duplicating...")
         masks = self.remove_overlapping_masks(masks)
@@ -336,7 +336,8 @@ class GrainInspector:
                 self.fig.canvas.draw()
                 return
 
-if __name__ == "__main__":              #Code Proper
+# --- Beginning of Main Exectution ---
+if __name__ == "__main__":
     print("\n!!! RUNNING VERSION 32.0 (DUAL-STREAM FUSION) !!!")
     
     os.makedirs(OUTPUT_FOLDER, exist_ok=True)
@@ -346,68 +347,30 @@ if __name__ == "__main__":              #Code Proper
 
     seg = GrainSegmenter()
     
-    struct_files = [f for f in os.listdir(TEST_FOLDER) if "_struct" in f]
-    print(f"Found {len(struct_files)} Test Pairs.")
+    struct_files = [f for f in os.listdir(TEST_FOLDER) if "_struct" in f]                                       ### Look for all the struct files
+    print(f"Found {len(struct_files)} Non Moke Images.")
     
-    for f in struct_files:
-        f_polar = f.replace("_struct", "_polar")
-        path_s = os.path.join(TEST_FOLDER, f)
+    # --- Begin Loop for the searching for pairs
+    for f in struct_files:                                                                                     
+        f_polar = f.replace("_struct", "_polar")                                                               ###Three lines save the struct and polar as path_s and path_p
+        path_s = os.path.join(TEST_FOLDER, f)                                                                   
         path_p = os.path.join(TEST_FOLDER, f_polar)
         
         if not os.path.exists(path_p): continue
         
         print(f"Analyzing {f}...")
-        img, processed_polar, data = seg.analyze_pair(path_s, path_p)
+        img, processed_polar, data = seg.analyze_pair(path_s, path_p)                                          ### Run anaylze pairs and SAM in all files
 
+
+        base = os.path.splitext(f)[0].replace("_struct", "")
+
+        cv2.imwrite(os.path.join(DATA_FOLDER, f"{base}_struct.png"), img)
+        cv2.imwrite(os.path.join(DATA_FOLDER, f"{base}_polar.png"), processed_polar)
         
-        if data:
-
-             # --- 3x3 patch sorting begin ---
-            h, w = processed_polar.shape[:2]
-            patch_w = w / 4
-            patch_h = h / 4
-
-            def patch_sort_key(g):
-                ys, xs = np.where(g['mask'] > 0)
-                cy = np.mean(ys)
-                cx = np.mean(xs)
-
-                patch_row = int(cy // patch_h)
-                patch_col = int(cx // patch_w)
-
-                return (patch_row, patch_col, cx)
-
-            data = sorted(data, key=patch_sort_key)
-
-            # --- QC image: Draw Patches Begin Comment out ---
-            qc_img = processed_polar.copy()
-
-            line_color = (255, 255, 255)  # white
-            line_thickness = 2
-
-            x1 = int(patch_w)
-            x2 = int(2 * patch_w)
-            x3 = int(3 * patch_w)
-            y1 = int(patch_h)
-            y2 = int(2 * patch_h)
-            y3 = int(3 * patch_h)
-
-            cv2.line(qc_img, (x1, 0), (x1, h), line_color, line_thickness)
-            cv2.line(qc_img, (x2, 0), (x2, h), line_color, line_thickness)
-            cv2.line(qc_img, (x3, 0), (x3, h), line_color, line_thickness)
-            cv2.line(qc_img, (0, y1), (w, y1), line_color, line_thickness)
-            cv2.line(qc_img, (0, y2), (w, y2), line_color, line_thickness)
-            cv2.line(qc_img, (0, y3), (w, y3), line_color, line_thickness)
-
-
-            qc_filename = f"{os.path.splitext(f)[0]}_patch_qc.png"
-            cv2.imwrite(os.path.join(SC_Folder, qc_filename), qc_img)
-            # --- QC image: Draw Patches End Comment out ---
-
-
+        if data:                                                                                               ###data is a list of the outputted grains. data = final_grain_data
 
             # --- More Main Code Stuff --
-            np.save(os.path.join(DATA_FOLDER, f + ".npy"), data)
+            np.save(os.path.join(DATA_FOLDER, os.path.splitext(f)[0] + ".npy"), data)
             
             vis = processed_polar.copy()
             for g in data:
@@ -422,27 +385,6 @@ if __name__ == "__main__":              #Code Proper
             cv2.imwrite(os.path.join(OUTPUT_FOLDER, f"Result_{f}.png"), vis)
             print(f"  -> Saved Result to {OUTPUT_FOLDER}/Result_{f}.png")
 
-            # ---Grain Cutout to png ---
-            base_name = os.path.splitext(f)[0] 
 
-            for i, g in enumerate(data):
-                mask_u8 = (g['mask'].astype(np.uint8) * 255)
-
-                coords = cv2.findNonZero(mask_u8)
-                if coords is None:
-                    continue
-
-                x, y, w, h = cv2.boundingRect(coords)
-
-                grain_cutout = np.zeros((h, w, 3), dtype=np.uint8)
-                cropped_img = processed_polar[y:y+h, x:x+w]
-                cropped_mask = mask_u8[y:y+h, x:x+w]
-
-                grain_cutout[cropped_mask > 0] = cropped_img[cropped_mask > 0]
-
-                grain_filename = f"{base_name}_grain_{i:04d}.png"
-                mask_filename  = f"{base_name}_grain_{i:04d}_mask.png"
-                cv2.imwrite(os.path.join(SC_Folder, grain_filename), grain_cutout)   
-                cv2.imwrite(os.path.join(SC_Folder, mask_filename), cropped_mask)
 
 
