@@ -8,23 +8,23 @@ import matplotlib.pyplot as plt
 # USER SETTINGS
 # ==========================================
 
-DATA_FOLDER = r"C:\Users\lavab\Desktop\Stuff\UCF\Research\MOKE Program\MOKE_REPO\processed_data"
-SC_FOLDER = r"C:\Users\lavab\Desktop\Stuff\UCF\Research\MOKE Program\MOKE_REPO\sc_results"
-RAST_FOLDER = r"C:\Users\lavab\Desktop\Stuff\UCF\Research\MOKE Program\MOKE_REPO\rast_results"
+DATA_FOLDER = r"processed_data"
+SC_FOLDER = r"sc_results"
+RAST_FOLDER = r"rast_results"
 
 PATCH_ROWS = 4
 PATCH_COLS = 4
 
 BLUR_SIGMA = 1.5
 
-THRESHOLD_MODE = "valley"   # "valley" or "otsu"
-THRESHOLD_OFFSET = 0
+THRESHOLD_MODE = "median"   # valley, median, or peak_midpoint
+THRESHOLD_OFFSET = 6
 MASK_ERODE_PX = 0
 
 RASTER_DIRECTIONS = ["horizontal", "vertical", "diag_down", "diag_up"]
 RASTER_SPACING_PX = 1
 RASTER_LINE_WIDTH_PX = 1
-RASTER_LEN_PX_RATIO = 41.56   # px / um
+RASTER_PX_LEN_RATIO = 41.56   # um / px
 
 RASTER_SAVE_OVERLAY = True
 RASTER_SAVE_COORDS = True
@@ -81,13 +81,13 @@ def patch_sort_key(grain, patch_h, patch_w):
     return (patch_row, patch_col, cx)
 
 
-def compute_threshold(valid_pixels):
+def compute_threshold(valid_pixels):                                        ##Right now, I have a few options. When we find what works, we can delete the others
+    hist, _ = np.histogram(valid_pixels, bins=256, range=(0, 255))
+
+    peak1 = np.argmax(hist[:128])
+    peak2 = np.argmax(hist[128:]) + 128
+
     if THRESHOLD_MODE == "valley":
-        hist, _ = np.histogram(valid_pixels, bins=256, range=(0, 255))
-
-        peak1 = np.argmax(hist[:128])
-        peak2 = np.argmax(hist[128:]) + 128
-
         lo = min(peak1, peak2)
         hi = max(peak1, peak2)
 
@@ -97,6 +97,13 @@ def compute_threshold(valid_pixels):
         else:
             valley_index = np.argmin(valley_region)
             threshold = lo + valley_index
+
+    elif THRESHOLD_MODE == "median":
+        threshold = int(np.median(valid_pixels))
+
+    elif THRESHOLD_MODE == "peak_midpoint":
+        threshold = int((peak1 + peak2) / 2)
+
     else:
         threshold, _ = cv2.threshold(valid_pixels.astype(np.uint8), 0, 255, cv2.THRESH_OTSU)
 
@@ -104,6 +111,86 @@ def compute_threshold(valid_pixels):
     threshold = max(0, min(255, threshold))
     return threshold
 
+def measure_direction(binary, mask_u8_small, direction, spacing, line_width):
+    direction_mask = build_raster_mask(
+        mask_u8_small,
+        directions=[direction],
+        spacing=spacing,
+        line_width=line_width
+    )
+
+    direction_binary = cv2.bitwise_and(binary, direction_mask)
+
+    transition_count = 0
+    sampled_px = 0
+
+    if direction == "horizontal":
+        for row in range(direction_binary.shape[0]):
+            line = direction_binary[row, :]
+            mask_line = direction_mask[row, :] > 0
+            if np.sum(mask_line) < 2:
+                continue
+            values = line[mask_line]
+            transition_count += np.sum(values[1:] != values[:-1])
+            sampled_px += len(values)
+
+    elif direction == "vertical":
+        for col in range(direction_binary.shape[1]):
+            line = direction_binary[:, col]
+            mask_line = direction_mask[:, col] > 0
+            if np.sum(mask_line) < 2:
+                continue
+            values = line[mask_line]
+            transition_count += np.sum(values[1:] != values[:-1])
+            sampled_px += len(values)
+
+    elif direction == "diag_down":
+        h, w = direction_binary.shape
+
+        for x0 in range(0, w, spacing):
+            travel = min(w - 1 - x0, h - 1)
+            if travel < 1:
+                continue
+            xs = np.arange(x0, x0 + travel + 1)
+            ys = np.arange(0, travel + 1)
+            values = direction_binary[ys, xs]
+            transition_count += np.sum(values[1:] != values[:-1])
+            sampled_px += len(values)
+
+        for y0 in range(spacing, h, spacing):
+            travel = min(w - 1, h - 1 - y0)
+            if travel < 1:
+                continue
+            xs = np.arange(0, travel + 1)
+            ys = np.arange(y0, y0 + travel + 1)
+            values = direction_binary[ys, xs]
+            transition_count += np.sum(values[1:] != values[:-1])
+            sampled_px += len(values)
+
+    elif direction == "diag_up":
+        h, w = direction_binary.shape
+
+        for x0 in range(0, w, spacing):
+            travel = min(w - 1 - x0, h - 1)
+            if travel < 1:
+                continue
+            xs = np.arange(x0, x0 + travel + 1)
+            ys = np.arange(h - 1, h - 1 - travel - 1, -1)
+            values = direction_binary[ys, xs]
+            transition_count += np.sum(values[1:] != values[:-1])
+            sampled_px += len(values)
+
+        for y0 in range(0, h - spacing, spacing):
+            travel = min(w - 1, y0)
+            if travel < 1:
+                continue
+            xs = np.arange(0, travel + 1)
+            ys = np.arange(y0, y0 - travel - 1, -1)
+            values = direction_binary[ys, xs]
+            transition_count += np.sum(values[1:] != values[:-1])
+            sampled_px += len(values)
+
+    return direction_mask, direction_binary, sampled_px, transition_count
 
 # ==========================================
 # FOLDERS
@@ -245,6 +332,11 @@ for npy_file in npy_files:
         # --------------------------------------
 
         valid_pixels = blurred[mask_bool]
+
+        original_pixels = gray[mask_bool]
+        contrast_pixels = contrast[mask_bool]
+        blur_pixels = blurred[mask_bool]
+
         threshold = compute_threshold(valid_pixels)
 
         binary = np.zeros_like(gray, dtype=np.uint8)
@@ -259,12 +351,31 @@ for npy_file in npy_files:
 
         mask_u8_small = (mask_bool.astype(np.uint8) * 255)
 
-        raster_mask = build_raster_mask(
-            mask_u8_small,
-            directions=RASTER_DIRECTIONS,
-            spacing=RASTER_SPACING_PX,
-            line_width=RASTER_LINE_WIDTH_PX
-        )
+        raster_mask = np.zeros_like(mask_u8_small)
+        raster_binary = np.zeros_like(binary)
+
+        total_hv_px = 0
+        total_diag_px = 0
+        total_transitions = 0
+
+        for direction in RASTER_DIRECTIONS:
+            dir_mask, dir_binary, sampled_px, transitions = measure_direction(
+                binary,
+                mask_u8_small,
+                direction,
+                RASTER_SPACING_PX,
+                RASTER_LINE_WIDTH_PX
+            )
+
+            raster_mask = cv2.bitwise_or(raster_mask, dir_mask)
+            raster_binary = cv2.bitwise_or(raster_binary, dir_binary)
+
+            total_transitions += transitions
+
+            if direction in ["horizontal", "vertical"]:
+                total_hv_px += sampled_px
+            else:
+                total_diag_px += sampled_px
 
         raster_binary = cv2.bitwise_and(binary, raster_mask)
 
@@ -275,32 +386,21 @@ for npy_file in npy_files:
         ys, xs = np.where(raster_binary > 0)
         coords_list = [(xv, yv) for yv, xv in zip(ys, xs)]
 
-        transition_count = 0
-        line_length_px = 0
+        total_length_um = (
+            total_hv_px / RASTER_PX_LEN_RATIO +
+            (total_diag_px * np.sqrt(2)) / RASTER_PX_LEN_RATIO
+        )
 
-        for row in range(raster_binary.shape[0]):
-            line = raster_binary[row, :]
-            mask_line = raster_mask[row, :] > 0
-
-            if np.sum(mask_line) < 2:
-                continue
-
-            values = line[mask_line]
-            transitions = np.sum(values[1:] != values[:-1])
-
-            transition_count += transitions
-            line_length_px += len(values)
-
-        if transition_count > 0:
-            domain_width_px = line_length_px / transition_count
+        if total_transitions > 0:
+            domain_width_um = total_length_um / total_transitions
+            domain_width_px = domain_width_um * RASTER_PX_LEN_RATIO
         else:
+            domain_width_um = 0
             domain_width_px = 0
-
-        domain_width_um = domain_width_px / RASTER_LEN_PX_RATIO
 
         if domain_width_um > 0:
             grain_domain_widths.append((grain_file_base, domain_width_um))
-
+            
         # --------------------------------------
         # SAVE RASTER IMAGE
         # --------------------------------------
@@ -330,7 +430,7 @@ for npy_file in npy_files:
             with open(csv_path, "w") as f:
                 f.write("x,y,analysis,value\n")
 
-                max_len = max(len(coords_list), 4)
+                max_len = max(len(coords_list), 5)
 
                 for j in range(max_len):
                     if j < len(coords_list):
@@ -340,12 +440,14 @@ for npy_file in npy_files:
                         coord_text = ","
 
                     if j == 0:
-                        analysis_text = f"total_line_length_px,{line_length_px}"
+                        analysis_text = f"total_hv_px,{total_hv_px}"
                     elif j == 1:
-                        analysis_text = f"total_transitions,{transition_count}"
+                        analysis_text = f"total_diag_px,{total_diag_px}"
                     elif j == 2:
-                        analysis_text = f"domain_width_px,{domain_width_px}"
+                        analysis_text = f"total_transitions,{total_transitions}"
                     elif j == 3:
+                        analysis_text = f"domain_width_px,{domain_width_px}"
+                    elif j == 4:
                         analysis_text = f"domain_width_um,{domain_width_um}"
                     else:
                         analysis_text = ","
@@ -376,6 +478,27 @@ for npy_file in npy_files:
         qc_name = f"{grain_file_base}_qc.png"
         plt.tight_layout()
         plt.savefig(os.path.join(RAST_FOLDER, qc_name))
+        plt.close()
+
+
+        # --------------------------------------
+        # HISTOGRAM QC PANEL
+        # --------------------------------------
+
+        fig, ax = plt.subplots(1, 3, figsize=(12, 3))
+
+        ax[0].hist(original_pixels, bins=256, range=(0, 255))
+        ax[0].set_title("original hist")
+
+        ax[1].hist(contrast_pixels, bins=256, range=(0, 255))
+        ax[1].set_title("contrast hist")
+
+        ax[2].hist(blur_pixels, bins=256, range=(0, 255))
+        ax[2].set_title("blur hist")
+
+        hist_qc_name = f"{grain_file_base}_hist_qc.png"
+        plt.tight_layout()
+        plt.savefig(os.path.join(RAST_FOLDER, hist_qc_name))
         plt.close()
 
 # ==========================================
