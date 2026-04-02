@@ -27,7 +27,7 @@ CHECKPOINT_PATH = "segment-anything/assets/models/sam_vit_b_01ec64.pth"
 OUTPUT_FOLDER = "processed_results"
 DATA_FOLDER = "processed_data"
 TEST_FOLDER = "data/test_samples"
-SC_Folder = "sc_results"
+SC_FOLDER = "sc_results"
 MAX_GRAIN_DIAMETER = 50.0 
 
 # ==========================================
@@ -37,9 +37,12 @@ MAX_GRAIN_DIAMETER = 50.0
 class GrainSegmenter:
     def __init__(self, checkpoint_path=CHECKPOINT_PATH):
         print("--- INITIALIZING AI (V32.0 DUAL-STREAM FUSION) ---")
-        self.device = "cpu"
-        print("WARNING: Using CPU")
-        
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        if self.device == "cuda":
+            print("Using GPU (CUDA)")
+        else:
+            print("WARNING: Using CPU")        
+            
         if not os.path.exists(checkpoint_path):
             raise FileNotFoundError("Model missing")
 
@@ -78,7 +81,7 @@ class GrainSegmenter:
         return clean, enhanced
 
     def align_images_safe(self, img_ref, img_target): #This is aligning the images? I am not sure why? I am not sure how this helps. Internsity of MOKE and Non MOKE wont be similar
-        """Translation-Only Alignment."""
+        """Translation-Only Alignment."""             #struct is being passed as img_ref. polar is being passed as img_target accorind to analyze pairs
         gray_ref = cv2.cvtColor(img_ref, cv2.COLOR_BGR2GRAY)
         gray_target = cv2.cvtColor(img_target, cv2.COLOR_BGR2GRAY)
         warp_mode = cv2.MOTION_TRANSLATION
@@ -89,7 +92,7 @@ class GrainSegmenter:
             aligned_image = cv2.warpAffine(img_target, warp_matrix, (img_ref.shape[1], img_ref.shape[0]), flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
             return aligned_image
         except cv2.error:
-            return img_target
+            return img_target                                          #Returning the polar image
 
     def get_defect_mask_from_structure(self, struct_img):
         """
@@ -215,7 +218,7 @@ class GrainSegmenter:
 
         clean_struct, enhanced_struct = self.process_image_common(img_struct)
         clean_polar, _ = self.process_image_common(img_polar)
-        
+
         print(f"  [2/4] Aligning...")
         clean_polar = self.align_images_safe(clean_struct, clean_polar)
 
@@ -227,7 +230,7 @@ class GrainSegmenter:
         # --- STREAM B: GRAIN DETECTION (Polar/High-Contrast) ---
         print(f"  [4/4] Running AI on Polar Image (Guided)...")
         # Use Polar for segmentation as it shows domains best
-        masks = self.mask_generator.generate(cv2.cvtColor(clean_polar, cv2.COLOR_BGR2RGB))           ###THIS RUNS SAM ON MOKE IMAGE
+        masks = self.mask_generator.generate(cv2.cvtColor(clean_struct, cv2.COLOR_BGR2RGB))           ###THIS RUNS SAM ON MOKE IMAGE
         
         print(f"        -> Found {len(masks)} candidates. De-duplicating...")
         masks = self.remove_overlapping_masks(masks)
@@ -339,10 +342,11 @@ class GrainInspector:
 # --- Beginning of Main Exectution ---
 if __name__ == "__main__":
     print("\n!!! RUNNING VERSION 32.0 (DUAL-STREAM FUSION) !!!")
-    
+    print(torch.cuda.is_available())
+    print(torch.cuda.get_device_name(0))
     os.makedirs(OUTPUT_FOLDER, exist_ok=True)
     os.makedirs(DATA_FOLDER, exist_ok=True)
-    os.makedirs(SC_Folder, exist_ok=True)
+    os.makedirs(SC_FOLDER, exist_ok=True)
 
 
     seg = GrainSegmenter()
