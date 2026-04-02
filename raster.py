@@ -11,14 +11,14 @@ import matplotlib.pyplot as plt
 DATA_FOLDER = r"processed_data"
 SC_FOLDER = r"sc_results"
 RAST_FOLDER = r"rast_results"
-
+    
 PATCH_ROWS = 4
 PATCH_COLS = 4
 
-BLUR_SIGMA = 1.5
+BLUR_SIGMA = 1.5 
 
 THRESHOLD_MODE = "median"   # valley, median, or peak_midpoint
-THRESHOLD_OFFSET = 6
+THRESHOLD_OFFSET = 0
 MASK_ERODE_PX = 0
 
 RASTER_DIRECTIONS = ["horizontal", "vertical", "diag_down", "diag_up"]
@@ -28,6 +28,15 @@ RASTER_PX_LEN_RATIO = 41.56   # um / px
 
 RASTER_SAVE_OVERLAY = True
 RASTER_SAVE_COORDS = True
+
+DWCLOSURE = 0.57
+DWSTRIPE = 2.16
+
+ #---Reject poorly thresholded domains
+REJECT_EXTREME_BINARY = True
+WHITE_REJECT_THRESHOLD = 0.6
+BLACK_REJECT_THRESHOLD = 0.6
+
 
 # ==========================================
 # HELPERS
@@ -131,7 +140,8 @@ def measure_direction(binary, mask_u8_small, direction, spacing, line_width):
             if np.sum(mask_line) < 2:
                 continue
             values = line[mask_line]
-            transition_count += np.sum(values[1:] != values[:-1])
+            ##This line below takes two pixels next to each other and adds 1 to transition count if they are NOT equal. so, if a 0 and 255 are next to each other, its +1 to transition
+            transition_count += np.sum(values[1:] != values[:-1] ) #+1 is needed as #domain=#transitions +1 
             sampled_px += len(values)
 
     elif direction == "vertical":
@@ -141,7 +151,8 @@ def measure_direction(binary, mask_u8_small, direction, spacing, line_width):
             if np.sum(mask_line) < 2:
                 continue
             values = line[mask_line]
-            transition_count += np.sum(values[1:] != values[:-1])
+            ##This line below takes two pixels next to each other and adds 1 to transition count if they are NOT equal. so, if a 0 and 255 are next to each other, its +1 to transition
+            transition_count += np.sum(values[1:] != values[:-1] )  #+1 is needed as #domain=#transitions +1 
             sampled_px += len(values)
 
     elif direction == "diag_down":
@@ -154,7 +165,8 @@ def measure_direction(binary, mask_u8_small, direction, spacing, line_width):
             xs = np.arange(x0, x0 + travel + 1)
             ys = np.arange(0, travel + 1)
             values = direction_binary[ys, xs]
-            transition_count += np.sum(values[1:] != values[:-1])
+            ##This line below takes two pixels next to each other and adds 1 to transition count if they are NOT equal. so, if a 0 and 255 are next to each other, its +1 to transition
+            transition_count += np.sum(values[1:] != values[:-1] ) #+1 is needed as #domain=#transitions +1 
             sampled_px += len(values)
 
         for y0 in range(spacing, h, spacing):
@@ -164,7 +176,8 @@ def measure_direction(binary, mask_u8_small, direction, spacing, line_width):
             xs = np.arange(0, travel + 1)
             ys = np.arange(y0, y0 + travel + 1)
             values = direction_binary[ys, xs]
-            transition_count += np.sum(values[1:] != values[:-1])
+            ##This line below takes two pixels next to each other and adds 1 to transition count if they are NOT equal. so, if a 0 and 255 are next to each other, its +1 to transition
+            transition_count += np.sum(values[1:] != values[:-1] ) #+1 is needed as #domain=#transitions +1 
             sampled_px += len(values)
 
     elif direction == "diag_up":
@@ -177,7 +190,8 @@ def measure_direction(binary, mask_u8_small, direction, spacing, line_width):
             xs = np.arange(x0, x0 + travel + 1)
             ys = np.arange(h - 1, h - 1 - travel - 1, -1)
             values = direction_binary[ys, xs]
-            transition_count += np.sum(values[1:] != values[:-1])
+            ##This line below takes two pixels next to each other and adds 1 to transition count if they are NOT equal. so, if a 0 and 255 are next to each other, its +1 to transition
+            transition_count += np.sum(values[1:] != values[:-1] ) #+1 is needed as #domain=#transitions +1 
             sampled_px += len(values)
 
         for y0 in range(0, h - spacing, spacing):
@@ -187,7 +201,8 @@ def measure_direction(binary, mask_u8_small, direction, spacing, line_width):
             xs = np.arange(0, travel + 1)
             ys = np.arange(y0, y0 - travel - 1, -1)
             values = direction_binary[ys, xs]
-            transition_count += np.sum(values[1:] != values[:-1])
+            ##This line below takes two pixels next to each other and adds 1 to transition count if they are NOT equal. so, if a 0 and 255 are next to each other, its +1 to transition
+            transition_count += np.sum(values[1:] != values[:-1] ) #+1 is needed as #domain=#transitions +1 
             sampled_px += len(values)
 
     return direction_mask, direction_binary, sampled_px, transition_count
@@ -205,6 +220,7 @@ os.makedirs(RAST_FOLDER, exist_ok=True)
 
 npy_files = [f for f in os.listdir(DATA_FOLDER) if f.endswith("_struct.npy")]
 grain_domain_widths = []
+grain_alignments = []
 
 for npy_file in npy_files:
     sample_base = npy_file.replace("_struct.npy", "")
@@ -267,7 +283,7 @@ for npy_file in npy_files:
     # ==========================================
     # GRAIN LOOP
     # ==========================================
-
+    zero_domain_count = 0
     for i, g in enumerate(data):
         mask_u8 = (g["mask"].astype(np.uint8) * 255)
 
@@ -345,6 +361,22 @@ for npy_file in npy_files:
         binary_name = f"{grain_file_base}_binary.png"
         cv2.imwrite(os.path.join(RAST_FOLDER, binary_name), binary)
 
+        white_fraction = np.mean(binary[mask_bool] == 255)
+        black_fraction = np.mean(binary[mask_bool] == 0)
+
+        reject_binary = (
+            white_fraction >= WHITE_REJECT_THRESHOLD or
+            black_fraction >= BLACK_REJECT_THRESHOLD
+        )
+
+        if reject_binary:
+            print(
+                f"REJECTED BINARY: {grain_file_base} | "
+                f"white={white_fraction:.3f} | black={black_fraction:.3f}"
+            )
+            continue
+
+
         # --------------------------------------
         # RASTERIZATION
         # --------------------------------------
@@ -379,6 +411,13 @@ for npy_file in npy_files:
 
         raster_binary = cv2.bitwise_and(binary, raster_mask)
 
+        # overlay raster on binary image
+        binary_overlay = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+        binary_overlay[raster_binary > 0] = (255, 0, 0)
+
+        binary_overlay_name = f"{grain_file_base}_binary_raster_overlay.png"
+        cv2.imwrite(os.path.join(RAST_FOLDER, binary_overlay_name), binary_overlay)
+
         # --------------------------------------
         # DOMAIN THICKNESS ANALYSIS
         # --------------------------------------
@@ -398,23 +437,35 @@ for npy_file in npy_files:
             domain_width_um = 0
             domain_width_px = 0
 
-        if domain_width_um > 0:
-            grain_domain_widths.append((grain_file_base, domain_width_um))
+        if domain_width_um == 0:                                #Check for 0um domain errors
+            print(f"ZERO DOMAIN: {grain_file_base} | transitions={total_transitions} | hv_px={total_hv_px} | diag_px={total_diag_px}")
+            zero_domain_count += 1
+        alignment = (1 - (domain_width_um - DWCLOSURE) / (DWSTRIPE - DWCLOSURE)) * 100  ### Domain alignment calculation
             
+        if domain_width_um > 0:                                                         #Add domain width & alignment to list
+            grain_domain_widths.append((grain_file_base, domain_width_um))
+            grain_alignments.append((grain_file_base, alignment))
+        
+        
+
+
         # --------------------------------------
         # SAVE RASTER IMAGE
         # --------------------------------------
 
+        overlay = cv2.cvtColor(blurred.astype(np.uint8), cv2.COLOR_GRAY2BGR)
+        overlay[raster_binary > 0] = (255, 0, 0)
+
         raster_name = f"{grain_file_base}_raster.png"
-        cv2.imwrite(os.path.join(RAST_FOLDER, raster_name), raster_binary)
+        cv2.imwrite(os.path.join(RAST_FOLDER, raster_name), overlay)
 
         # --------------------------------------
         # SAVE OVERLAY
         # --------------------------------------
 
         if RASTER_SAVE_OVERLAY:
-            overlay = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-            overlay[(raster_mask > 0) & mask_bool] = (0, 255, 0)
+            overlay = cv2.cvtColor(blurred.astype(np.uint8), cv2.COLOR_GRAY2BGR)
+            overlay[(raster_mask > 0) & mask_bool] = (255, 0, 0)
 
             overlay_name = f"{grain_file_base}_raster_overlay.png"
             cv2.imwrite(os.path.join(RAST_FOLDER, overlay_name), overlay)
@@ -430,7 +481,7 @@ for npy_file in npy_files:
             with open(csv_path, "w") as f:
                 f.write("x,y,analysis,value\n")
 
-                max_len = max(len(coords_list), 5)
+                max_len = max(len(coords_list), 6)
 
                 for j in range(max_len):
                     if j < len(coords_list):
@@ -449,6 +500,8 @@ for npy_file in npy_files:
                         analysis_text = f"domain_width_px,{domain_width_px}"
                     elif j == 4:
                         analysis_text = f"domain_width_um,{domain_width_um}"
+                    elif j == 5:
+                        analysis_text = f"alignment,{alignment}"
                     else:
                         analysis_text = ","
 
@@ -508,15 +561,37 @@ for npy_file in npy_files:
 summary_path = os.path.join(RAST_FOLDER, "overall_domain_summary.csv")
 
 values = [v for _, v in grain_domain_widths if v > 0]
+
 if len(values) > 0:
     avg_domain_width_um = np.mean(values)
 else:
     avg_domain_width_um = 0
 
+
+alignment_values = [a for _, a in grain_alignments]
+
+if len(alignment_values) > 0:
+    aligned_count = sum(a >= 95 for a in alignment_values)
+    total_grains = len(alignment_values)
+    pct_alignment_95_or_greater = 100 * aligned_count / total_grains
+else:
+    aligned_count = 0
+    total_grains = 0
+    pct_alignment_95_or_greater = 0
+
+
+
+
 with open(summary_path, "w") as f:
-    f.write("grain_file,domain_width_um\n")
+    f.write("grain_file,domain_width_um,alignment\n")
+
+    alignment_dict = dict(grain_alignments)
 
     for name, value in grain_domain_widths:
-        f.write(f"{name},{value}\n")
+        alignment_value = alignment_dict.get(name, "")
+        f.write(f"{name},{value},{alignment_value}\n")
 
     f.write(f"\nAVERAGE,{avg_domain_width_um}\n")
+    f.write(f"PERCENT_ALIGNMENT_GE_95,{pct_alignment_95_or_greater}\n")
+
+print(f"\nTOTAL ZERO DOMAIN GRAINS: {zero_domain_count}")   ##See if any 0 um domains are found. error check
