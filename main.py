@@ -59,6 +59,30 @@ class GrainSegmenter:
             min_mask_region_area=50  
         )
 
+    def grain_detection(self, object_list, struct_img, percentile=10):
+        """
+        Filters objects based on brightness in struct image.
+        Returns only likely grains.
+        """
+        gray = cv2.cvtColor(struct_img, cv2.COLOR_BGR2GRAY)
+        
+        #  --- build histogram from full struct image ---
+        threshold = np.percentile(gray,percentile) #Get the 88th percentile of brightness in the struct image, to use as a cutoff for what is a grain and what is a pore/phase
+
+        grain_list = []
+
+        for g in object_list:
+            mask =g["mask"]
+
+            pixels = gray[mask > 0]
+            if len(pixels) == 0: continue
+
+            mean_val = np.mean(pixels)
+
+            if mean_val > threshold:
+                grain_list.append(g)
+        return grain_list
+
     def process_image_common(self, image):
         """Helper to Clean and Enhance images."""
         h, w = image.shape[:2]
@@ -94,7 +118,7 @@ class GrainSegmenter:
         except cv2.error:
             return img_target                                          #Returning the polar image
 
-    def get_defect_mask_from_structure(self, struct_img):
+    def get_defect_mask_from_structure(self, struct_img): #defunct. May delete after removing downstream influence
         """
         STREAM A: Detects Pores and Phases using the clean Structure Image.
         Returns a mask where 255 = Defect (Bad), 0 = Grain (Good).
@@ -237,7 +261,7 @@ class GrainSegmenter:
         
         gray_polar = cv2.cvtColor(clean_polar, cv2.COLOR_BGR2GRAY)
         temp_data_list = []
-        
+
         total_image_area = clean_struct.shape[0] * clean_struct.shape[1]
 
         for mask_data in masks:
@@ -278,7 +302,7 @@ class GrainSegmenter:
 
         classified_data = self.classify_grains_hybrid(temp_data_list)
         
-        final_grain_data = []
+        object_list = []
         for g in classified_data:
             if g['type'] == 'magnetic':
                 moke = cv2.bitwise_and(clean_polar, clean_polar, mask=g['mask'])
@@ -293,9 +317,11 @@ class GrainSegmenter:
                     if misalign > 45: misalign = 90 - misalign
                     g['misalignment'] = misalign
             
-            final_grain_data.append(g)
+            object_list.append(g)
 
-        return clean_struct, clean_polar, final_grain_data
+        return clean_struct, clean_polar, object_list
+
+
 
 class GrainInspector:
     def __init__(self, image_path, data_path, filename):
@@ -364,14 +390,14 @@ if __name__ == "__main__":
         
         print(f"Analyzing {f}...")
         img, processed_polar, data = seg.analyze_pair(path_s, path_p)                                          ### Run anaylze pairs and SAM in all files
-
+        data = seg.grain_detection(data, img, percentile=22)
 
         base = os.path.splitext(f)[0].replace("_struct", "")
 
         cv2.imwrite(os.path.join(DATA_FOLDER, f"{base}_struct.png"), img)
         cv2.imwrite(os.path.join(DATA_FOLDER, f"{base}_polar.png"), processed_polar)
         
-        if data:                                                                                               ###data is a list of the outputted grains. data = final_grain_data
+        if data:                                                                                               ###data is a list of the outputted grains. data = object_list
 
             # --- More Main Code Stuff --
             np.save(os.path.join(DATA_FOLDER, os.path.splitext(f)[0] + ".npy"), data)
