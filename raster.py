@@ -11,20 +11,20 @@ import matplotlib.pyplot as plt
 DATA_FOLDER = r"processed_data"
 SC_FOLDER = r"sc_results"
 RAST_FOLDER = r"rast_results"
-    
+
 PATCH_ROWS = 4
 PATCH_COLS = 4
 
 BLUR_SIGMA = 1.5 
 
 THRESHOLD_MODE = "median"   # valley, median, or peak_midpoint
-THRESHOLD_OFFSET = 0
+THRESHOLD_OFFSET = 12
 MASK_ERODE_PX = 0
 
 RASTER_DIRECTIONS = ["horizontal", "vertical", "diag_down", "diag_up"]
 RASTER_SPACING_PX = 1
 RASTER_LINE_WIDTH_PX = 1
-RASTER_PX_LEN_RATIO = 41.56   # um / px
+RASTER_PX_LEN_RATIO = 41.56   # px / um
 
 RASTER_SAVE_OVERLAY = True
 RASTER_SAVE_COORDS = True
@@ -32,11 +32,16 @@ RASTER_SAVE_COORDS = True
 DWCLOSURE = 0.57
 DWSTRIPE = 2.16
 
+
+ #---reject small lines
+MIN_LINE_LENGTH_PX = 20
+MIN_LINE_TRANSITIONS = 2
+
  #---Reject poorly thresholded domains
 REJECT_EXTREME_BINARY = True
 WHITE_REJECT_THRESHOLD = 0.6
 BLACK_REJECT_THRESHOLD = 0.6
-MIN_MAX_LINE_TRANSITIONS = 0
+MIN_MAX_LINE_TRANSITIONS = 9
 
 
 # ==========================================
@@ -247,6 +252,8 @@ os.makedirs(RAST_FOLDER, exist_ok=True)
 npy_files = [f for f in os.listdir(DATA_FOLDER) if f.endswith("_struct.npy")]
 grain_domain_widths = []
 grain_alignments = []
+heatmap_data = []
+
 
 for npy_file in npy_files:
     sample_base = npy_file.replace("_struct.npy", "")
@@ -477,6 +484,11 @@ for npy_file in npy_files:
         if domain_width_um > 0:                                                         #Add domain width & alignment to list
             grain_domain_widths.append((grain_file_base, domain_width_um))
             grain_alignments.append((grain_file_base, alignment))
+            heatmap_data.append({
+                "mask": g["mask"],
+                "domain_width": domain_width_um,
+                "alignment": alignment
+            })
         
         
 
@@ -585,6 +597,66 @@ for npy_file in npy_files:
         plt.tight_layout()
         plt.savefig(os.path.join(RAST_FOLDER, hist_qc_name))
         plt.close()
+    
+    # ==========================================
+    # HEAT MAPS
+    # ==========================================
+
+    if len(heatmap_data) > 0:
+        width_vals = [d["domain_width"] for d in heatmap_data]
+        align_vals = [d["alignment"] for d in heatmap_data]
+
+        w_min, w_max = min(width_vals), max(width_vals)
+        a_min, a_max = min(align_vals), max(align_vals)
+
+        heatmap_width = np.zeros((h, w), dtype=np.float32)
+        heatmap_align = np.zeros((h, w), dtype=np.float32)
+
+        for d in heatmap_data:
+            mask = d["mask"] > 0
+
+            heatmap_width[mask] = d["domain_width"]
+            heatmap_align[mask] = d["alignment"]
+
+        width_color = cv2.applyColorMap((heatmap_width * 255).astype(np.uint8), cv2.COLORMAP_JET)
+        align_color = cv2.applyColorMap((heatmap_align * 255).astype(np.uint8), cv2.COLORMAP_JET)
+
+        alpha = 0.5
+        overlay_width = cv2.addWeighted(polar_img, 1 - alpha, width_color, alpha, 0)
+        overlay_align = cv2.addWeighted(polar_img, 1 - alpha, align_color, alpha, 0)
+
+        #- Plot width heatmap
+        img_h, img_w = polar_img.shape[:2]
+        fig_w = 10
+        fig_h = fig_w * img_h / img_w
+        fig, ax = plt.subplots(figsize=(14, 14))
+
+        ax.imshow(cv2.cvtColor(polar_img, cv2.COLOR_BGR2RGB))
+        im = ax.imshow(heatmap_width, cmap="coolwarm", alpha=0.5, vmin=w_min, vmax=w_max)
+        ax.axis("off")
+        cbar = plt.colorbar(im, ax=ax, orientation="horizontal", fraction=0.05, pad=0.02)
+        cbar.set_label("Domain Width (um)")
+        plt.subplots_adjust(left=0, right=1, top=0.5, bottom=0.2)
+        plt.savefig(os.path.join(RAST_FOLDER, f"{sample_base}_domain_width_heatmap.png"), bbox_inches="tight", pad_inches=0)
+        plt.close()
+
+        #- Plot alignment heatmap
+        img_h, img_w = polar_img.shape[:2]
+        fig_w = 10
+        fig_h = fig_w * img_h / img_w
+        fig, ax = plt.subplots(figsize=(14, 14))
+
+        ax.imshow(cv2.cvtColor(polar_img, cv2.COLOR_BGR2RGB))
+        im = ax.imshow(heatmap_align, cmap="jet", alpha=0.5, vmin=a_min, vmax=a_max)
+        ax.axis("off")
+        cbar = plt.colorbar(im, ax=ax, orientation="horizontal", fraction=0.05, pad=0.02)
+        cbar.set_label("Alignment (%)")
+        plt.subplots_adjust(left=0, right=1, top=.6, bottom=0.2)
+        plt.savefig(os.path.join(RAST_FOLDER, f"{sample_base}_alignment_heatmap.png"), bbox_inches="tight", pad_inches=0)
+        plt.close()
+
+
+
 
 # ==========================================
 # SAVE OVERALL DOMAIN AVERAGE
