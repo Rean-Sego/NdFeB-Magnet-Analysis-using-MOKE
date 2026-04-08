@@ -54,7 +54,7 @@ class GrainSegmenter:
             points_per_side=64,             
             crop_n_layers=1,                
             crop_n_points_downscale_factor=2,
-            pred_iou_thresh=0.90,           
+            pred_iou_thresh=0.50,           
             stability_score_thresh=0.92,
             min_mask_region_area=50  
         )

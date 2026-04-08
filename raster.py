@@ -18,7 +18,7 @@ PATCH_COLS = 4
 BLUR_SIGMA = 1.5 
 
 THRESHOLD_MODE = "median"   # valley, median, or peak_midpoint
-THRESHOLD_OFFSET = 12
+THRESHOLD_OFFSET = 18
 MASK_ERODE_PX = 0
 
 RASTER_DIRECTIONS = ["horizontal", "vertical", "diag_down", "diag_up"]
@@ -33,7 +33,7 @@ DWCLOSURE = 0.57
 DWSTRIPE = 2.16
 
 
- #---reject small lines
+ #---Individual line removal thresholds.
 MIN_LINE_LENGTH_PX = 20
 MIN_LINE_TRANSITIONS = 2
 
@@ -41,7 +41,7 @@ MIN_LINE_TRANSITIONS = 2
 REJECT_EXTREME_BINARY = True
 WHITE_REJECT_THRESHOLD = 0.6
 BLACK_REJECT_THRESHOLD = 0.6
-MIN_MAX_LINE_TRANSITIONS = 9
+MIN_MAX_LINE_TRANSITIONS = 2  #Grain Removal; If no lines meet the threshold, remove the whole grain.
 
 
 # ==========================================
@@ -149,11 +149,17 @@ def measure_direction(binary, mask_u8_small, direction, spacing, line_width):
             values = line[mask_line]
             ##This line below takes two pixels next to each other and adds 1 to transition count if they are NOT equal. so, if a 0 and 255 are next to each other, its +1 to transition
 
+            line_length_px = len(values)
             line_transitions = np.sum(values[1:] != values[:-1])
+
+            if line_length_px < MIN_LINE_LENGTH_PX:
+                continue
+            if line_transitions < MIN_LINE_TRANSITIONS:
+                continue
+
             transition_count += line_transitions
             max_line_transitions = max(max_line_transitions, line_transitions)
-
-            sampled_px += len(values)
+            sampled_px += line_length_px
 
     elif direction == "vertical":
         for col in range(direction_binary.shape[1]):
@@ -164,11 +170,17 @@ def measure_direction(binary, mask_u8_small, direction, spacing, line_width):
             values = line[mask_line]
             ##This line below takes two pixels next to each other and adds 1 to transition count if they are NOT equal. so, if a 0 and 255 are next to each other, its +1 to transition
 
+            line_length_px = len(values)
             line_transitions = np.sum(values[1:] != values[:-1])
+
+            if line_length_px < MIN_LINE_LENGTH_PX:
+                continue
+            if line_transitions < MIN_LINE_TRANSITIONS:
+                continue
+
             transition_count += line_transitions
             max_line_transitions = max(max_line_transitions, line_transitions)
-
-            sampled_px += len(values)
+            sampled_px += line_length_px
 
     elif direction == "diag_down":
         h, w = direction_binary.shape
@@ -182,11 +194,17 @@ def measure_direction(binary, mask_u8_small, direction, spacing, line_width):
             values = direction_binary[ys, xs]
             ##This line below takes two pixels next to each other and adds 1 to transition count if they are NOT equal. so, if a 0 and 255 are next to each other, its +1 to transition
 
+            line_length_px = len(values)
             line_transitions = np.sum(values[1:] != values[:-1])
+
+            if line_length_px < MIN_LINE_LENGTH_PX:
+                continue
+            if line_transitions < MIN_LINE_TRANSITIONS:
+                continue
+
             transition_count += line_transitions
             max_line_transitions = max(max_line_transitions, line_transitions)
-
-            sampled_px += len(values)
+            sampled_px += line_length_px
 
         for y0 in range(spacing, h, spacing):
             travel = min(w - 1, h - 1 - y0)
@@ -197,11 +215,17 @@ def measure_direction(binary, mask_u8_small, direction, spacing, line_width):
             values = direction_binary[ys, xs]
             ##This line below takes two pixels next to each other and adds 1 to transition count if they are NOT equal. so, if a 0 and 255 are next to each other, its +1 to transition
 
+            line_length_px = len(values)
             line_transitions = np.sum(values[1:] != values[:-1])
+
+            if line_length_px < MIN_LINE_LENGTH_PX:
+                continue
+            if line_transitions < MIN_LINE_TRANSITIONS:
+                continue
+
             transition_count += line_transitions
             max_line_transitions = max(max_line_transitions, line_transitions)
-
-            sampled_px += len(values)
+            sampled_px += line_length_px
 
     elif direction == "diag_up":
         h, w = direction_binary.shape
@@ -215,11 +239,17 @@ def measure_direction(binary, mask_u8_small, direction, spacing, line_width):
             values = direction_binary[ys, xs]
             ##This line below takes two pixels next to each other and adds 1 to transition count if they are NOT equal. so, if a 0 and 255 are next to each other, its +1 to transition
 
+            line_length_px = len(values)
             line_transitions = np.sum(values[1:] != values[:-1])
+
+            if line_length_px < MIN_LINE_LENGTH_PX:
+                continue
+            if line_transitions < MIN_LINE_TRANSITIONS:
+                continue
+
             transition_count += line_transitions
             max_line_transitions = max(max_line_transitions, line_transitions)
-
-            sampled_px += len(values)
+            sampled_px += line_length_px
 
         for y0 in range(0, h - spacing, spacing):
             travel = min(w - 1, y0)
@@ -230,11 +260,17 @@ def measure_direction(binary, mask_u8_small, direction, spacing, line_width):
             values = direction_binary[ys, xs]
             ##This line below takes two pixels next to each other and adds 1 to transition count if they are NOT equal. so, if a 0 and 255 are next to each other, its +1 to transition
 
+            line_length_px = len(values)
             line_transitions = np.sum(values[1:] != values[:-1])
+
+            if line_length_px < MIN_LINE_LENGTH_PX:
+                continue
+            if line_transitions < MIN_LINE_TRANSITIONS:
+                continue
+
             transition_count += line_transitions
             max_line_transitions = max(max_line_transitions, line_transitions)
-
-            sampled_px += len(values)
+            sampled_px += line_length_px
 
     return direction_mask, direction_binary, sampled_px, transition_count, max_line_transitions
 
@@ -252,6 +288,7 @@ os.makedirs(RAST_FOLDER, exist_ok=True)
 npy_files = [f for f in os.listdir(DATA_FOLDER) if f.endswith("_struct.npy")]
 grain_domain_widths = []
 grain_alignments = []
+sample_area_data = []
 heatmap_data = []
 
 
