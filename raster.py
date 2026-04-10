@@ -31,7 +31,7 @@ RASTER_SAVE_COORDS = True
 
 DWCLOSURE = 0.57
 DWSTRIPE = 2.16
-
+ALIGNMENT_THRESHOLD = 95  # Percentage alignment threshold for "aligned" classification
 
  #---Individual line removal thresholds.
 MIN_LINE_LENGTH_PX = 20
@@ -286,14 +286,29 @@ os.makedirs(RAST_FOLDER, exist_ok=True)
 # ==========================================
 
 npy_files = [f for f in os.listdir(DATA_FOLDER) if f.endswith("_struct.npy")]
-grain_domain_widths = []
-grain_alignments = []
-sample_area_data = []
-heatmap_data = []
+
+#--For final domain width and alignment
+all_avg_domain_widths = []
+all_alignment_pcts = []
+#--End
 
 
 for npy_file in npy_files:
     sample_base = npy_file.replace("_struct.npy", "")
+
+    grain_domain_widths = []
+    grain_alignments = []
+    sample_area_data = []
+    grain_area_data = []
+    aligned_grain_area_data = []
+    heatmap_data = []
+
+    #--make folder for each sample in single crystal and raster results
+    sample_sc_folder = os.path.join(SC_FOLDER, sample_base)
+    os.makedirs(sample_sc_folder, exist_ok=True)
+    sample_rast_folder = os.path.join(RAST_FOLDER, sample_base)
+    os.makedirs(sample_rast_folder, exist_ok=True)
+    #--End
 
     npy_path = os.path.join(DATA_FOLDER, npy_file)
     struct_img_path = os.path.join(DATA_FOLDER, f"{sample_base}_struct.png")
@@ -326,6 +341,8 @@ for npy_file in npy_files:
     # ==========================================
 
     h, w = polar_img.shape[:2]
+    total_image_area_um2 = h * w * (1 / RASTER_PX_LEN_RATIO) ** 2
+    sample_area_data.append((sample_base, total_image_area_um2))
     patch_w = w / PATCH_COLS
     patch_h = h / PATCH_ROWS
 
@@ -348,7 +365,7 @@ for npy_file in npy_files:
         cv2.line(qc_img, (0, y), (w, y), line_color, line_thickness)
 
     qc_filename = f"{sample_base}_patch_qc.png"
-    cv2.imwrite(os.path.join(SC_FOLDER, qc_filename), qc_img)
+    cv2.imwrite(os.path.join(sample_sc_folder, qc_filename), qc_img)
 
     # ==========================================
     # GRAIN LOOP
@@ -377,8 +394,8 @@ for npy_file in npy_files:
         grain_filename = f"{grain_file_base}.png"
         mask_filename = f"{grain_file_base}_mask.png"
 
-        cv2.imwrite(os.path.join(SC_FOLDER, grain_filename), grain_cutout)
-        cv2.imwrite(os.path.join(SC_FOLDER, mask_filename), cropped_mask)
+        cv2.imwrite(os.path.join(sample_sc_folder, grain_filename), grain_cutout)
+        cv2.imwrite(os.path.join(sample_sc_folder, mask_filename), cropped_mask)
 
         # --------------------------------------
         # PREP FOR THICKNESS / RASTER
@@ -396,6 +413,10 @@ for npy_file in npy_files:
         mask_bool = mask > 0
         if np.count_nonzero(mask_bool) == 0:
             continue
+
+        #- Grain Area Calculation of mask
+        grain_area_px = np.count_nonzero(mask_bool)
+        grain_area_um2 = grain_area_px * (1 / RASTER_PX_LEN_RATIO) ** 2
 
         # --------------------------------------
         # CONTRAST
@@ -429,7 +450,7 @@ for npy_file in npy_files:
         binary[(blurred > threshold) & mask_bool] = 255
 
         binary_name = f"{grain_file_base}_binary.png"
-        cv2.imwrite(os.path.join(RAST_FOLDER, binary_name), binary)
+        cv2.imwrite(os.path.join(sample_rast_folder, binary_name), binary)
 
         white_fraction = np.mean(binary[mask_bool] == 255)
         black_fraction = np.mean(binary[mask_bool] == 0)
@@ -492,7 +513,7 @@ for npy_file in npy_files:
         binary_overlay[raster_binary > 0] = (255, 0, 0)
 
         binary_overlay_name = f"{grain_file_base}_binary_raster_overlay.png"
-        cv2.imwrite(os.path.join(RAST_FOLDER, binary_overlay_name), binary_overlay)
+        cv2.imwrite(os.path.join(sample_rast_folder, binary_overlay_name), binary_overlay)
 
         # --------------------------------------
         # DOMAIN THICKNESS ANALYSIS
@@ -521,11 +542,14 @@ for npy_file in npy_files:
         if domain_width_um > 0:                                                         #Add domain width & alignment to list
             grain_domain_widths.append((grain_file_base, domain_width_um))
             grain_alignments.append((grain_file_base, alignment))
+            grain_area_data.append((grain_file_base, grain_area_um2))
             heatmap_data.append({
                 "mask": g["mask"],
                 "domain_width": domain_width_um,
                 "alignment": alignment
             })
+            if alignment >= ALIGNMENT_THRESHOLD:
+                aligned_grain_area_data.append((grain_file_base, grain_area_um2))
         
         
 
@@ -538,7 +562,7 @@ for npy_file in npy_files:
         overlay[raster_binary > 0] = (255, 0, 0)
 
         raster_name = f"{grain_file_base}_raster.png"
-        cv2.imwrite(os.path.join(RAST_FOLDER, raster_name), overlay)
+        cv2.imwrite(os.path.join(sample_rast_folder, raster_name), overlay)
 
         # --------------------------------------
         # SAVE OVERLAY
@@ -549,7 +573,7 @@ for npy_file in npy_files:
             overlay[(raster_mask > 0) & mask_bool] = (255, 0, 0)
 
             overlay_name = f"{grain_file_base}_raster_overlay.png"
-            cv2.imwrite(os.path.join(RAST_FOLDER, overlay_name), overlay)
+            cv2.imwrite(os.path.join(sample_rast_folder, overlay_name), overlay)
 
         # --------------------------------------
         # SAVE COORDS + ANALYSIS CSV
@@ -557,12 +581,12 @@ for npy_file in npy_files:
 
         if RASTER_SAVE_COORDS:
             csv_name = f"{grain_file_base}_raster_coords.csv"
-            csv_path = os.path.join(RAST_FOLDER, csv_name)
+            csv_path = os.path.join(sample_rast_folder, csv_name)
 
             with open(csv_path, "w") as f:
                 f.write("x,y,analysis,value\n")
 
-                max_len = max(len(coords_list), 6)
+                max_len = max(len(coords_list), 7)
 
                 for j in range(max_len):
                     if j < len(coords_list):
@@ -583,6 +607,8 @@ for npy_file in npy_files:
                         analysis_text = f"domain_width_um,{domain_width_um}"
                     elif j == 5:
                         analysis_text = f"alignment,{alignment}"
+                    elif j == 6:
+                        analysis_text = f"grain_area_um2,{grain_area_um2}"
                     else:
                         analysis_text = ","
 
@@ -611,7 +637,7 @@ for npy_file in npy_files:
 
         qc_name = f"{grain_file_base}_qc.png"
         plt.tight_layout()
-        plt.savefig(os.path.join(RAST_FOLDER, qc_name))
+        plt.savefig(os.path.join(sample_rast_folder, qc_name))
         plt.close()
 
 
@@ -632,7 +658,7 @@ for npy_file in npy_files:
 
         hist_qc_name = f"{grain_file_base}_hist_qc.png"
         plt.tight_layout()
-        plt.savefig(os.path.join(RAST_FOLDER, hist_qc_name))
+        plt.savefig(os.path.join(sample_rast_folder, hist_qc_name))
         plt.close()
     
     # ==========================================
@@ -670,11 +696,12 @@ for npy_file in npy_files:
 
         ax.imshow(cv2.cvtColor(polar_img, cv2.COLOR_BGR2RGB))
         im = ax.imshow(heatmap_width, cmap="coolwarm", alpha=0.5, vmin=w_min, vmax=w_max)
+        ax.set_facecolor("black") #Remove if you want to overlay original image
         ax.axis("off")
         cbar = plt.colorbar(im, ax=ax, orientation="horizontal", fraction=0.05, pad=0.02)
         cbar.set_label("Domain Width (um)")
         plt.subplots_adjust(left=0, right=1, top=0.5, bottom=0.2)
-        plt.savefig(os.path.join(RAST_FOLDER, f"{sample_base}_domain_width_heatmap.png"), bbox_inches="tight", pad_inches=0)
+        plt.savefig(os.path.join(sample_rast_folder, f"{sample_base}_domain_width_heatmap.png"), bbox_inches="tight", pad_inches=0)
         plt.close()
 
         #- Plot alignment heatmap
@@ -685,54 +712,91 @@ for npy_file in npy_files:
 
         ax.imshow(cv2.cvtColor(polar_img, cv2.COLOR_BGR2RGB))
         im = ax.imshow(heatmap_align, cmap="jet", alpha=0.5, vmin=a_min, vmax=a_max)
+        ax.set_facecolor("black") #Remove if you want to overlay original image
         ax.axis("off")
         cbar = plt.colorbar(im, ax=ax, orientation="horizontal", fraction=0.05, pad=0.02)
         cbar.set_label("Alignment (%)")
         plt.subplots_adjust(left=0, right=1, top=.6, bottom=0.2)
-        plt.savefig(os.path.join(RAST_FOLDER, f"{sample_base}_alignment_heatmap.png"), bbox_inches="tight", pad_inches=0)
+        plt.savefig(os.path.join(sample_rast_folder, f"{sample_base}_alignment_heatmap.png"), bbox_inches="tight", pad_inches=0)
         plt.close()
 
 
 
 
-# ==========================================
-# SAVE OVERALL DOMAIN AVERAGE
-# ==========================================
+    # ==========================================
+    # SAVE OVERALL DOMAIN AVERAGE OF PARENT
+    # ==========================================
 
-summary_path = os.path.join(RAST_FOLDER, "overall_domain_summary.csv")
+    summary_path = os.path.join(sample_rast_folder, "overall_domain_summary.csv")
 
-values = [v for _, v in grain_domain_widths if v > 0]
-
-if len(values) > 0:
-    avg_domain_width_um = np.mean(values)
-else:
-    avg_domain_width_um = 0
+    values = [v for _, v in grain_domain_widths if v > 0]
 
 
-alignment_values = [a for _, a in grain_alignments]
-
-if len(alignment_values) > 0:
-    aligned_count = sum(a >= 95 for a in alignment_values)
-    total_grains = len(alignment_values)
-    pct_alignment_95_or_greater = 100 * aligned_count / total_grains
-else:
-    aligned_count = 0
-    total_grains = 0
-    pct_alignment_95_or_greater = 0
+    #- Avergage Domain Width Calculation
+    if len(values) > 0:
+        avg_domain_width_um = np.mean(values)
+    else:
+        avg_domain_width_um = 0
 
 
+    alignment_values = [a for _, a in grain_alignments]
+
+    #- Grain area % calculation
+    all_grain_area_um2 = sum(v for _, v in grain_area_data)
+    aligned_grain_area_um2 = sum(v for _, v in aligned_grain_area_data)
+
+    if all_grain_area_um2 > 0:
+        total_grain_alignment_pct = 100 * aligned_grain_area_um2 / all_grain_area_um2
+    else:
+        total_grain_alignment_pct = 0
+
+    
+
+    #- Final alignment percentage calculation
+    if len(alignment_values) > 0:
+        aligned_count = sum(a >= ALIGNMENT_THRESHOLD for a in alignment_values)
+        total_grains = len(alignment_values)
+        pct_alignment_or_greater = 100 * aligned_count / total_grains
+    else:
+        aligned_count = 0
+        total_grains = 0
+        pct_alignment_or_greater = 0
 
 
-with open(summary_path, "w") as f:
-    f.write("grain_file,domain_width_um,alignment\n")
 
-    alignment_dict = dict(grain_alignments)
 
-    for name, value in grain_domain_widths:
-        alignment_value = alignment_dict.get(name, "")
-        f.write(f"{name},{value},{alignment_value}\n")
+    with open(summary_path, "w") as f:
+        f.write("grain_file,domain_width_um,alignment\n")
 
-    f.write(f"\nAVERAGE,{avg_domain_width_um}\n")
-    f.write(f"PERCENT_ALIGNMENT_GE_95,{pct_alignment_95_or_greater}\n")
+        alignment_dict = dict(grain_alignments)
 
-print(f"\nTOTAL ZERO DOMAIN GRAINS: {zero_domain_count}")   ##See if any 0 um domains are found. error check
+        for name, value in grain_domain_widths:
+            alignment_value = alignment_dict.get(name, "")
+            f.write(f"{name},{value},{alignment_value}\n")
+
+        f.write(f"\nAVERAGE,{avg_domain_width_um}\n")
+        f.write(f"Image Area,{total_image_area_um2}\n")
+        f.write(f"Total Grain Area,{all_grain_area_um2}\n")
+        f.write(f"Aligned Grain Area,{aligned_grain_area_um2}\n")
+        f.write(f"{ALIGNMENT_THRESHOLD}% Grain Count Alignment,{pct_alignment_or_greater}\n")
+        f.write(f"{ALIGNMENT_THRESHOLD}% Grain Area Alignment,{total_grain_alignment_pct}\n")
+        print(f"\nTOTAL ZERO DOMAIN GRAINS: {zero_domain_count}")   ##See if any 0 um domains are found. error check
+
+    #-Collect domain width and grain alignment for final summary
+    all_avg_domain_widths.append(avg_domain_width_um)
+    all_alignment_pcts.append(total_grain_alignment_pct)
+
+
+#-Get final averages for domain width and grain alignment
+final_avg_domain_width = np.mean(all_avg_domain_widths) if len(all_avg_domain_widths) > 0 else 0
+final_avg_alignment = np.mean(all_alignment_pcts) if len(all_alignment_pcts) > 0 else 0
+
+master_path = os.path.join(RAST_FOLDER, "master_summary.csv")
+
+with open(master_path, "w") as f:
+    f.write(",avg_domain_width_um,grain_area_alignment_pct\n")
+
+    for dw, align in zip(all_avg_domain_widths, all_alignment_pcts):
+        f.write(f",{dw},{align}\n")
+
+    f.write(f"\nFINAL_AVG,{final_avg_domain_width},{final_avg_alignment}\n")
