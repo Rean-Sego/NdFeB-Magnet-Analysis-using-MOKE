@@ -51,7 +51,7 @@ class GrainSegmenter:
         
         self.mask_generator = SamAutomaticMaskGenerator(  #Variables to how the prompt points and boxes are made
             model=self.sam,
-            points_per_side=64,             
+            points_per_side=32,             
             crop_n_layers=1,                
             crop_n_points_downscale_factor=2,
             pred_iou_thresh=0.50,           
@@ -59,7 +59,7 @@ class GrainSegmenter:
             min_mask_region_area=50  
         )
 
-    def grain_detection(self, object_list, struct_img, percentile=10):
+    def grain_detection(self, object_list, struct_img, percentile=22):
         """
         Filters objects based on brightness in struct image.
         Returns only likely grains.
@@ -390,7 +390,7 @@ if __name__ == "__main__":
         
         print(f"Analyzing {f}...")
         img, processed_polar, data = seg.analyze_pair(path_s, path_p)                                          ### Run anaylze pairs and SAM in all files
-        data = seg.grain_detection(data, img, percentile=22)
+        data = seg.grain_detection(data, img)
 
         base = os.path.splitext(f)[0].replace("_struct", "")
 

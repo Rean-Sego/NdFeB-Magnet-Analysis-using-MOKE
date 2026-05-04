@@ -18,7 +18,7 @@ PATCH_COLS = 4
 BLUR_SIGMA = 1.5 
 
 THRESHOLD_MODE = "median"   # valley, median, or peak_midpoint
-THRESHOLD_OFFSET = 18
+THRESHOLD_OFFSET = 0
 MASK_ERODE_PX = 0
 
 RASTER_DIRECTIONS = ["horizontal", "vertical", "diag_down", "diag_up"]
@@ -34,7 +34,7 @@ DWSTRIPE = 2.16
 ALIGNMENT_THRESHOLD = 95  # Percentage alignment threshold for "aligned" classification
 
  #---Individual line removal thresholds.
-MIN_LINE_LENGTH_PX = 20
+MIN_LINE_LENGTH_PX = 10
 MIN_LINE_TRANSITIONS = 2
 
  #---Reject poorly thresholded domains
@@ -695,7 +695,7 @@ for npy_file in npy_files:
         fig, ax = plt.subplots(figsize=(14, 14))
 
         ax.imshow(cv2.cvtColor(polar_img, cv2.COLOR_BGR2RGB))
-        im = ax.imshow(heatmap_width, cmap="coolwarm", alpha=0.5, vmin=w_min, vmax=w_max)
+        im = ax.imshow(heatmap_width, cmap="jet", alpha=0.5, vmin=w_min, vmax=w_max)
         ax.set_facecolor("black") #Remove if you want to overlay original image
         ax.axis("off")
         cbar = plt.colorbar(im, ax=ax, orientation="horizontal", fraction=0.05, pad=0.02)
@@ -711,7 +711,7 @@ for npy_file in npy_files:
         fig, ax = plt.subplots(figsize=(14, 14))
 
         ax.imshow(cv2.cvtColor(polar_img, cv2.COLOR_BGR2RGB))
-        im = ax.imshow(heatmap_align, cmap="jet", alpha=0.5, vmin=a_min, vmax=a_max)
+        im = ax.imshow(heatmap_align, cmap="coolwarm", alpha=0.5, vmin=a_min, vmax=a_max)
         ax.set_facecolor("black") #Remove if you want to overlay original image
         ax.axis("off")
         cbar = plt.colorbar(im, ax=ax, orientation="horizontal", fraction=0.05, pad=0.02)
