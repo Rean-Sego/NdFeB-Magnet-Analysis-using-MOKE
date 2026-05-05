@@ -41,7 +41,7 @@ MIN_LINE_TRANSITIONS = 2
 REJECT_EXTREME_BINARY = True
 WHITE_REJECT_THRESHOLD = 0.6
 BLACK_REJECT_THRESHOLD = 0.6
-MIN_MAX_LINE_TRANSITIONS = 2  #Grain Removal; If no lines meet the threshold, remove the whole grain.
+MIN_MAX_LINE_TRANSITIONS = 5  #Grain Removal; If no lines meet the threshold, remove the whole grain.
 
 
 # ==========================================
@@ -292,9 +292,9 @@ all_avg_domain_widths = []
 all_alignment_pcts = []
 #--End
 
-
 for npy_file in npy_files:
     sample_base = npy_file.replace("_struct.npy", "")
+    type, grain_id = sample_base.split("_")
 
     grain_domain_widths = []
     grain_alignments = []
@@ -727,7 +727,7 @@ for npy_file in npy_files:
     # SAVE OVERALL DOMAIN AVERAGE OF PARENT
     # ==========================================
 
-    summary_path = os.path.join(sample_rast_folder, "overall_domain_summary.csv")
+    summary_path = os.path.join(sample_rast_folder, f"{sample_base}_metadata.csv")
 
     values = [v for _, v in grain_domain_widths if v > 0]
 
@@ -766,20 +766,26 @@ for npy_file in npy_files:
 
 
     with open(summary_path, "w") as f:
-        f.write("grain_file,domain_width_um,alignment\n")
+        f.write(
+            "uid,grain_dw_um,grain_alignment_pct,grain_grain_area_um2,"
+            "sample_avg_domain_width_um,sample_image_area_um2,"
+            "sample_total_grain_area_um2,sample_aligned_grain_area_um2,"
+            "sample_grain_count_alignment_pct,sample_grain_area_alignment_pct\n"
+        )
 
         alignment_dict = dict(grain_alignments)
+        area_dict = dict(grain_area_data)
 
         for name, value in grain_domain_widths:
             alignment_value = alignment_dict.get(name, "")
-            f.write(f"{name},{value},{alignment_value}\n")
+            area_value = area_dict.get(name, "")
 
-        f.write(f"\nAVERAGE,{avg_domain_width_um}\n")
-        f.write(f"Image Area,{total_image_area_um2}\n")
-        f.write(f"Total Grain Area,{all_grain_area_um2}\n")
-        f.write(f"Aligned Grain Area,{aligned_grain_area_um2}\n")
-        f.write(f"{ALIGNMENT_THRESHOLD}% Grain Count Alignment,{pct_alignment_or_greater}\n")
-        f.write(f"{ALIGNMENT_THRESHOLD}% Grain Area Alignment,{total_grain_alignment_pct}\n")
+            f.write(
+                f"{sample_base},{value},{alignment_value},{area_value},"
+                f"{avg_domain_width_um},{total_image_area_um2},"
+                f"{all_grain_area_um2},{aligned_grain_area_um2},"
+                f"{pct_alignment_or_greater},{total_grain_alignment_pct}\n"
+            )
         print(f"\nTOTAL ZERO DOMAIN GRAINS: {zero_domain_count}")   ##See if any 0 um domains are found. error check
 
     #-Collect domain width and grain alignment for final summary
