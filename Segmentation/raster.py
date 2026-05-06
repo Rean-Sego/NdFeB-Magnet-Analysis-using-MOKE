@@ -285,7 +285,7 @@ os.makedirs(RAST_FOLDER, exist_ok=True)
 # FIND PARENT SAMPLES
 # ==========================================
 
-npy_files = [f for f in os.listdir(DATA_FOLDER) if f.endswith("_struct.npy")]
+npy_files = [f for f in os.listdir(DATA_FOLDER) if f.endswith("_P.npy")]
 
 #--For final domain width and alignment
 all_avg_domain_widths = []
@@ -293,7 +293,7 @@ all_alignment_pcts = []
 #--End
 
 for npy_file in npy_files:
-    sample_base = npy_file.replace("_struct.npy", "")
+    sample_base = npy_file.replace("_P.npy", "")
     type, grain_id = sample_base.split("_")
 
     grain_domain_widths = []
@@ -311,12 +311,8 @@ for npy_file in npy_files:
     #--End
 
     npy_path = os.path.join(DATA_FOLDER, npy_file)
-    struct_img_path = os.path.join(DATA_FOLDER, f"{sample_base}_struct.png")
-    polar_img_path = os.path.join(DATA_FOLDER, f"{sample_base}_polar.png")
 
-    if not os.path.exists(struct_img_path):
-        print(f"Skipping {sample_base}: missing struct image")
-        continue
+    polar_img_path = os.path.join(DATA_FOLDER, f"{sample_base}_P.png")
 
     if not os.path.exists(polar_img_path):
         print(f"Skipping {sample_base}: missing polar image")
@@ -325,10 +321,10 @@ for npy_file in npy_files:
     print(f"Processing {sample_base}...")
 
     data = np.load(npy_path, allow_pickle=True)
-    struct_img = cv2.imread(struct_img_path)
+
     polar_img = cv2.imread(polar_img_path)
 
-    if struct_img is None or polar_img is None:
+    if  polar_img is None:
         print(f"Skipping {sample_base}: could not read images")
         continue
 
@@ -767,7 +763,7 @@ for npy_file in npy_files:
 
     with open(summary_path, "w") as f:
         f.write(
-            "uid,grain_dw_um,grain_alignment_pct,grain_grain_area_um2,"
+            "uid,low_contrast_img,high_contrast_img,moke_img,grain_dw_um,grain_alignment_pct,grain_grain_area_um2,"
             "sample_avg_domain_width_um,sample_image_area_um2,"
             "sample_total_grain_area_um2,sample_aligned_grain_area_um2,"
             "sample_grain_count_alignment_pct,sample_grain_area_alignment_pct\n"
@@ -781,7 +777,7 @@ for npy_file in npy_files:
             area_value = area_dict.get(name, "")
 
             f.write(
-                f"{sample_base},{value},{alignment_value},{area_value},"
+                f"{sample_base},,,,{value},{alignment_value},{area_value},"
                 f"{avg_domain_width_um},{total_image_area_um2},"
                 f"{all_grain_area_um2},{aligned_grain_area_um2},"
                 f"{pct_alignment_or_greater},{total_grain_alignment_pct}\n"

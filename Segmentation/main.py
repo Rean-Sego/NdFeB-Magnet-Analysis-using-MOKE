@@ -18,6 +18,9 @@ from skimage import exposure
 MICRONS_PER_PIXEL = 0.066  
 ALIGNMENT_THRESHOLD_DEG = 15.0 
 SCALE_BAR_HEIGHT = 180  #How much of the bottom of the image is cropped
+STRUCT_MODE = "LC"   # "LC" or "HC"
+
+
 
 # MODEL SETTINGS
 MODEL_TYPE = "vit_b"
@@ -234,14 +237,17 @@ class GrainSegmenter:
         print(f"    -> Result: {magnetic_count} Magnets | {len(grain_data_list) - magnetic_count} Non-Magnets")
         return grain_data_list
 
-    def analyze_pair(self, struct_path, polar_path):    ## 1) Cleans & aligns the image up; 2) outputs sam as "mask"
+    def analyze_pair(self, struct_path, polar_path, nonstruct_path):    ## 1) Cleans & aligns the image up; 2) outputs sam as "mask"
         print(f"  [1/4] Loading & Preprocessing...")
         img_struct = cv2.imread(struct_path)
         img_polar = cv2.imread(polar_path)
-        if img_struct is None or img_polar is None: return None, None, None
+        img_non = cv2.imread(nonstruct_path)
+        if img_struct is None or img_polar is None or img_non is None:
+            return None, None, None
 
         clean_struct, enhanced_struct = self.process_image_common(img_struct)
         clean_polar, _ = self.process_image_common(img_polar)
+        clean_non, enhanced_non = self.process_image_common(img_non)
 
         print(f"  [2/4] Aligning...")
         clean_polar = self.align_images_safe(clean_struct, clean_polar)
@@ -319,9 +325,7 @@ class GrainSegmenter:
             
             object_list.append(g)
 
-        return clean_struct, clean_polar, object_list
-
-
+        return clean_struct, clean_polar, clean_non, object_list
 
 class GrainInspector:
     def __init__(self, image_path, data_path, filename):
@@ -376,31 +380,46 @@ if __name__ == "__main__":
 
 
     seg = GrainSegmenter()
-    
-    struct_files = [f for f in os.listdir(TEST_FOLDER) if "_struct" in f]                                       ### Look for all the struct files
-    print(f"Found {len(struct_files)} Non Moke Images.")
-    
+
+    struct_files = [f for f in os.listdir(TEST_FOLDER) if f"_{STRUCT_MODE}" in f]               ### Look for all the LC or HC files, depnds on which your running MOKE with
+    print(f"Found {len(struct_files)} Non Moke Images using {STRUCT_MODE} as STRUCT image.")
+
     # --- Begin Loop for the searching for pairs
-    for f in struct_files:                                                                                     
-        f_polar = f.replace("_struct", "_polar")                                                               ###Three lines save the struct and polar as path_s and path_p
-        path_s = os.path.join(TEST_FOLDER, f)                                                                   
-        path_p = os.path.join(TEST_FOLDER, f_polar)
-        
+    for f in struct_files:
+        base = f.rsplit("_", 1)[0]   # N48_01
+
+        path_lc = os.path.join(TEST_FOLDER, f"{base}_LC.png")
+        path_hc = os.path.join(TEST_FOLDER, f"{base}_HC.png")
+        path_p = os.path.join(TEST_FOLDER, f"{base}_P.png")
+
+        if STRUCT_MODE == "LC":
+            path_s = path_lc
+            path_n = path_hc
+        else:
+            path_s = path_hc
+            path_n = path_lc
+
         if not os.path.exists(path_p): continue
         
         print(f"Analyzing {f}...")
-        img, processed_polar, data = seg.analyze_pair(path_s, path_p)                                          ### Run anaylze pairs and SAM in all files
+        img, processed_polar, processed_non, data = seg.analyze_pair(path_s, path_p, path_n)                    ### Run anaylze pairs and SAM in all files
         data = seg.grain_detection(data, img)
 
-        base = os.path.splitext(f)[0].replace("_struct", "")
 
-        cv2.imwrite(os.path.join(DATA_FOLDER, f"{base}_struct.png"), img)
-        cv2.imwrite(os.path.join(DATA_FOLDER, f"{base}_polar.png"), processed_polar)
+
+        if STRUCT_MODE == "LC":
+            cv2.imwrite(os.path.join(DATA_FOLDER, f"{base}_LC.png"), img)
+            cv2.imwrite(os.path.join(DATA_FOLDER, f"{base}_HC.png"), processed_non)
+        else:
+            cv2.imwrite(os.path.join(DATA_FOLDER, f"{base}_HC.png"), img)
+            cv2.imwrite(os.path.join(DATA_FOLDER, f"{base}_LC.png"), processed_non)
+
+        cv2.imwrite(os.path.join(DATA_FOLDER, f"{base}_P.png"), processed_polar)
         
         if data:                                                                                               ###data is a list of the outputted grains. data = object_list
 
             # --- More Main Code Stuff --
-            np.save(os.path.join(DATA_FOLDER, os.path.splitext(f)[0] + ".npy"), data)
+            np.save(os.path.join(DATA_FOLDER, f"{base}_P.npy"), data)
             
             vis = processed_polar.copy()
             for g in data:
@@ -413,7 +432,7 @@ if __name__ == "__main__":
                 cv2.drawContours(vis, cnt, -1, color, 2)
                 
             cv2.imwrite(os.path.join(OUTPUT_FOLDER, f"Result_{f}.png"), vis)
-            print(f"  -> Saved Result to {OUTPUT_FOLDER}/Result_{f}.png")
+            print(f"  -> Saved Result to {OUTPUT_FOLDER}/Result_{f}")
 
 
 
