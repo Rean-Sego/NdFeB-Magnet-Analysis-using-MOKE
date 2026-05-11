@@ -812,7 +812,7 @@ for npy_file in npy_files:
             area_value = area_dict.get(name, "")
 
             f.write(
-                f"{sample_base},,,,{value},{alignment_value},{area_value},"
+                f"{sample_base},{sample_base}_LC.png,{sample_base}_HC.png,{sample_base}_P.png,{value},{alignment_value},{area_value},"
                 f"{sample_avg_domain_width_um},{total_image_area_um2},"
                 f"{all_grain_area_um2},{aligned_grain_area_um2},"
                 f"{sample_grain_count_alignment_pct},{sample_grain_area_alignment_pct}\n"
@@ -881,7 +881,7 @@ batch_columns = [
     "sample_total_grain_area_um2",
     "sample_aligned_grain_area_um2",
 
-    "sample_grain_count"
+    "sample_grain_count",
     "sample_grain_density_grains_per_um2",
     "sample_grain_count_alignment_pct",
     "sample_grain_area_alignment_pct",
@@ -893,4 +893,4 @@ with open(master_path, "w") as f:
     f.write(",".join(batch_columns) + "\n")
 
     for row in batch_rows:
-        f.write(",".join(str(row[col]) for col in batch_columns) + "\n")
+        f.write(",".join(str(row.get(col, "")) for col in batch_columns) + "\n")
