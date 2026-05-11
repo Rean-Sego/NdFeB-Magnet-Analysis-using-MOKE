@@ -8,9 +8,13 @@ import matplotlib.pyplot as plt
 # USER SETTINGS
 # ==========================================
 
-DATA_FOLDER = r"processed_data"
-SC_FOLDER = r"sc_results"
-RAST_FOLDER = r"rast_results"
+OUTPUTS_FOLDER = r"outputs"
+
+DATA_FOLDER = os.path.join(OUTPUTS_FOLDER, "images")
+OBJECT_MASK_FOLDER = os.path.join(OUTPUTS_FOLDER, "object_mask")
+
+SC_FOLDER = os.path.join(OUTPUTS_FOLDER, "sc_results")
+RAST_FOLDER = os.path.join(OUTPUTS_FOLDER, "rast_results")
 
 PATCH_ROWS = 4
 PATCH_COLS = 4
@@ -285,12 +289,14 @@ os.makedirs(RAST_FOLDER, exist_ok=True)
 # FIND PARENT SAMPLES
 # ==========================================
 
-npy_files = [f for f in os.listdir(DATA_FOLDER) if f.endswith("_P.npy")]
+npy_files = [f for f in os.listdir(OBJECT_MASK_FOLDER) if f.endswith("_P.npy")]
 
 #--For final domain width and alignment
 all_avg_domain_widths = []
 all_alignment_pcts = []
 #--End
+batch_rows = []
+
 
 for npy_file in npy_files:
     sample_base = npy_file.replace("_P.npy", "")
@@ -310,7 +316,7 @@ for npy_file in npy_files:
     os.makedirs(sample_rast_folder, exist_ok=True)
     #--End
 
-    npy_path = os.path.join(DATA_FOLDER, npy_file)
+    npy_path = os.path.join(OBJECT_MASK_FOLDER, npy_file)
 
     polar_img_path = os.path.join(DATA_FOLDER, f"{sample_base}_P.png")
 
@@ -725,39 +731,68 @@ for npy_file in npy_files:
 
     summary_path = os.path.join(sample_rast_folder, f"{sample_base}_metadata.csv")
 
-    values = [v for _, v in grain_domain_widths if v > 0]
-
-
-    #- Avergage Domain Width Calculation
-    if len(values) > 0:
-        avg_domain_width_um = np.mean(values)
-    else:
-        avg_domain_width_um = 0
-
-
+    domain_width_values = [v for _, v in grain_domain_widths if v > 0]
+    grain_area_values = [v for _, v in grain_area_data]
     alignment_values = [a for _, a in grain_alignments]
 
-    #- Grain area % calculation
-    all_grain_area_um2 = sum(v for _, v in grain_area_data)
+    # --- Domain width stats ---
+    if len(domain_width_values) > 0:
+        sample_avg_domain_width_um = np.mean(domain_width_values)
+        sample_median_domain_width_um = np.median(domain_width_values)
+        sample_std_domain_width_um = np.std(domain_width_values)
+        sample_min_domain_width_um = np.min(domain_width_values)
+        sample_max_domain_width_um = np.max(domain_width_values)
+    else:
+        sample_avg_domain_width_um = 0
+        sample_median_domain_width_um = 0
+        sample_std_domain_width_um = 0
+        sample_min_domain_width_um = 0
+        sample_max_domain_width_um = 0
+
+    # --- Grain area stats ---
+    if len(grain_area_values) > 0:
+        sample_avg_grain_area_um2 = np.mean(grain_area_values)
+        sample_median_grain_area_um2 = np.median(grain_area_values)
+        sample_std_grain_area_um2 = np.std(grain_area_values)
+    else:
+        sample_avg_grain_area_um2 = 0
+        sample_median_grain_area_um2 = 0
+        sample_std_grain_area_um2 = 0
+
+    # --- Alignment stats ---
+    if len(alignment_values) > 0:
+        sample_avg_alignment_pct = np.mean(alignment_values)
+        sample_median_alignment_pct = np.median(alignment_values)
+        sample_std_alignment_pct = np.std(alignment_values)
+    else:
+        sample_avg_alignment_pct = 0
+        sample_median_alignment_pct = 0
+        sample_std_alignment_pct = 0
+
+    # --- Count and area totals ---
+    sample_grain_count = len(domain_width_values)
+    if total_image_area_um2 > 0:
+        sample_grain_density_grains_per_um2 = sample_grain_count / total_image_area_um2
+    else:
+        sample_grain_density_grains_per_um2 = 0
+
+
+    all_grain_area_um2 = sum(grain_area_values)
     aligned_grain_area_um2 = sum(v for _, v in aligned_grain_area_data)
 
     if all_grain_area_um2 > 0:
-        total_grain_alignment_pct = 100 * aligned_grain_area_um2 / all_grain_area_um2
+        sample_grain_area_alignment_pct = 100 * aligned_grain_area_um2 / all_grain_area_um2
     else:
-        total_grain_alignment_pct = 0
+        sample_grain_area_alignment_pct = 0
 
     
 
-    #- Final alignment percentage calculation
     if len(alignment_values) > 0:
         aligned_count = sum(a >= ALIGNMENT_THRESHOLD for a in alignment_values)
-        total_grains = len(alignment_values)
-        pct_alignment_or_greater = 100 * aligned_count / total_grains
+        sample_grain_count_alignment_pct = 100 * aligned_count / len(alignment_values)
     else:
         aligned_count = 0
-        total_grains = 0
-        pct_alignment_or_greater = 0
-
+        sample_grain_count_alignment_pct = 0
 
 
 
@@ -778,27 +813,84 @@ for npy_file in npy_files:
 
             f.write(
                 f"{sample_base},,,,{value},{alignment_value},{area_value},"
-                f"{avg_domain_width_um},{total_image_area_um2},"
+                f"{sample_avg_domain_width_um},{total_image_area_um2},"
                 f"{all_grain_area_um2},{aligned_grain_area_um2},"
-                f"{pct_alignment_or_greater},{total_grain_alignment_pct}\n"
-            )
+                f"{sample_grain_count_alignment_pct},{sample_grain_area_alignment_pct}\n"
+        )
         print(f"\nTOTAL ZERO DOMAIN GRAINS: {zero_domain_count}")   ##See if any 0 um domains are found. error check
 
-    #-Collect domain width and grain alignment for final summary
-    all_avg_domain_widths.append(avg_domain_width_um)
-    all_alignment_pcts.append(total_grain_alignment_pct)
+        batch_rows.append({
+        "uid": sample_base,
+        "low_contrast_img": f"{sample_base}_LC.png",
+        "high_contrast_img": f"{sample_base}_HC.png",
+        "moke_img": f"{sample_base}_P.png",
+
+        "sample_avg_domain_width_um": sample_avg_domain_width_um,
+        "sample_median_domain_width_um": sample_median_domain_width_um,
+        "sample_std_domain_width_um": sample_std_domain_width_um,
+        "sample_min_domain_width_um": sample_min_domain_width_um,
+        "sample_max_domain_width_um": sample_max_domain_width_um,
+
+        "sample_avg_grain_area_um2": sample_avg_grain_area_um2,
+        "sample_median_grain_area_um2": sample_median_grain_area_um2,
+        "sample_std_grain_area_um2": sample_std_grain_area_um2,
+
+        "sample_avg_alignment_pct": sample_avg_alignment_pct,
+        "sample_median_alignment_pct": sample_median_alignment_pct,
+        "sample_std_alignment_pct": sample_std_alignment_pct,
+
+        "sample_image_area_um2": total_image_area_um2,
+        "sample_total_grain_area_um2": all_grain_area_um2,
+        "sample_aligned_grain_area_um2": aligned_grain_area_um2,
+
+        "sample_grain_count": sample_grain_count,
+        "sample_grain_density_grains_per_um2": sample_grain_density_grains_per_um2,
+        "sample_grain_count_alignment_pct": sample_grain_count_alignment_pct,
+        "sample_grain_area_alignment_pct": sample_grain_area_alignment_pct,
+
+        "target_grade": type
+        })
+
+
 
 
 #-Get final averages for domain width and grain alignment
-final_avg_domain_width = np.mean(all_avg_domain_widths) if len(all_avg_domain_widths) > 0 else 0
-final_avg_alignment = np.mean(all_alignment_pcts) if len(all_alignment_pcts) > 0 else 0
+master_path = os.path.join(RAST_FOLDER, "batch_summary.csv")
 
-master_path = os.path.join(RAST_FOLDER, "master_summary.csv")
+batch_columns = [
+    "uid",
+    "low_contrast_img",
+    "high_contrast_img",
+    "moke_img",
+
+    "sample_avg_domain_width_um",
+    "sample_median_domain_width_um",
+    "sample_std_domain_width_um",
+    "sample_min_domain_width_um",
+    "sample_max_domain_width_um",
+
+    "sample_avg_grain_area_um2",
+    "sample_median_grain_area_um2",
+    "sample_std_grain_area_um2",
+
+    "sample_avg_alignment_pct",
+    "sample_median_alignment_pct",
+    "sample_std_alignment_pct",
+
+    "sample_image_area_um2",
+    "sample_total_grain_area_um2",
+    "sample_aligned_grain_area_um2",
+
+    "sample_grain_count"
+    "sample_grain_density_grains_per_um2",
+    "sample_grain_count_alignment_pct",
+    "sample_grain_area_alignment_pct",
+
+    "target_grade"
+]
 
 with open(master_path, "w") as f:
-    f.write(",avg_domain_width_um,grain_area_alignment_pct\n")
+    f.write(",".join(batch_columns) + "\n")
 
-    for dw, align in zip(all_avg_domain_widths, all_alignment_pcts):
-        f.write(f",{dw},{align}\n")
-
-    f.write(f"\nFINAL_AVG,{final_avg_domain_width},{final_avg_alignment}\n")
+    for row in batch_rows:
+        f.write(",".join(str(row[col]) for col in batch_columns) + "\n")

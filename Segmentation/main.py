@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
+import gc
 from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
 from skimage.color import rgb2gray
 from skimage.feature import structure_tensor
@@ -18,8 +19,8 @@ from skimage import exposure
 MICRONS_PER_PIXEL = 0.066  
 ALIGNMENT_THRESHOLD_DEG = 15.0 
 SCALE_BAR_HEIGHT = 180  #How much of the bottom of the image is cropped
-STRUCT_MODE = "LC"   # "LC" or "HC"
-
+STRUCT_MODE = "HC"   # "LC" or "HC"
+MAX_GRAIN_DIAMETER = 50.0 
 
 
 # MODEL SETTINGS
@@ -27,11 +28,16 @@ MODEL_TYPE = "vit_b"
 CHECKPOINT_PATH = "segment-anything/assets/models/sam_vit_b_01ec64.pth"
 
 # FOLDERS
-OUTPUT_FOLDER = "processed_results"
-DATA_FOLDER = "processed_data"
+OUTPUTS_FOLDER = "outputs"
+
+IMAGE_FOLDER = os.path.join(OUTPUTS_FOLDER, "images")
+OBJECT_MASK_FOLDER = os.path.join(OUTPUTS_FOLDER, "object_mask")
+VISUAL_OVERLAY_FOLDER = os.path.join(OUTPUTS_FOLDER, "visual_overlay")
+
 TEST_FOLDER = "data/test_samples"
 SC_FOLDER = "sc_results"
-MAX_GRAIN_DIAMETER = 50.0 
+
+
 
 # ==========================================
 # --- CORE LOGIC ---
@@ -374,8 +380,10 @@ if __name__ == "__main__":
     print("\n!!! RUNNING VERSION 32.0 (DUAL-STREAM FUSION) !!!")
     print(torch.cuda.is_available())
     print(torch.cuda.get_device_name(0))
-    os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-    os.makedirs(DATA_FOLDER, exist_ok=True)
+    
+    os.makedirs(IMAGE_FOLDER, exist_ok=True)
+    os.makedirs(OBJECT_MASK_FOLDER, exist_ok=True)
+    os.makedirs(VISUAL_OVERLAY_FOLDER, exist_ok=True)
     os.makedirs(SC_FOLDER, exist_ok=True)
 
 
@@ -408,18 +416,19 @@ if __name__ == "__main__":
 
 
         if STRUCT_MODE == "LC":
-            cv2.imwrite(os.path.join(DATA_FOLDER, f"{base}_LC.png"), img)
-            cv2.imwrite(os.path.join(DATA_FOLDER, f"{base}_HC.png"), processed_non)
+            cv2.imwrite(os.path.join(IMAGE_FOLDER, f"{base}_LC.png"), img)
+            cv2.imwrite(os.path.join(IMAGE_FOLDER, f"{base}_HC.png"), processed_non)
         else:
-            cv2.imwrite(os.path.join(DATA_FOLDER, f"{base}_HC.png"), img)
-            cv2.imwrite(os.path.join(DATA_FOLDER, f"{base}_LC.png"), processed_non)
+            cv2.imwrite(os.path.join(IMAGE_FOLDER, f"{base}_HC.png"), img)
+            cv2.imwrite(os.path.join(IMAGE_FOLDER, f"{base}_LC.png"), processed_non)
 
-        cv2.imwrite(os.path.join(DATA_FOLDER, f"{base}_P.png"), processed_polar)
+        cv2.imwrite(os.path.join(IMAGE_FOLDER, f"{base}_P.png"), processed_polar)
+
         
         if data:                                                                                               ###data is a list of the outputted grains. data = object_list
 
             # --- More Main Code Stuff --
-            np.save(os.path.join(DATA_FOLDER, f"{base}_P.npy"), data)
+            np.save(os.path.join(OBJECT_MASK_FOLDER, f"{base}_P.npy"), data)
             
             vis = processed_polar.copy()
             for g in data:
@@ -431,8 +440,12 @@ if __name__ == "__main__":
                 cnt = cv2.findContours(g['mask'], cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
                 cv2.drawContours(vis, cnt, -1, color, 2)
                 
-            cv2.imwrite(os.path.join(OUTPUT_FOLDER, f"Result_{f}.png"), vis)
-            print(f"  -> Saved Result to {OUTPUT_FOLDER}/Result_{f}")
+            cv2.imwrite(os.path.join(VISUAL_OVERLAY_FOLDER, f"Result_{f}.png"), vis)
+            print(f"  -> Saved Result to {VISUAL_OVERLAY_FOLDER}/Result_{f}")
+            
+        del img, processed_polar, processed_non, data, vis
+        gc.collect()
+        torch.cuda.empty_cache()
 
 
 
