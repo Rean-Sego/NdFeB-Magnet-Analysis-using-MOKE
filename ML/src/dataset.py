@@ -10,13 +10,13 @@ from torchvision import transforms
 
 
 class MOKEDataset(Dataset):
-    def __init__(self):
+    def __init__(self, csv_name="metadata.csv"):
         super().__init__()
 
         src_dir = Path(__file__).resolve().parent
         ml_dir = src_dir.parent
 
-        self.csv_path = ml_dir / "inputs" / "metadata" / "metadata.csv"
+        self.csv_path = ml_dir / "inputs" / "metadata" / csv_name
         self.img_dir = ml_dir / "inputs" / "grain_img"
 
         self.df = pd.read_csv(self.csv_path)
