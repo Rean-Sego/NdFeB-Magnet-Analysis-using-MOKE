@@ -10,6 +10,9 @@ from dataset import MOKEDataset
 from model import MOKEModel
 
 
+USE_IMAGES = False   # True = use images + metadata, False = metadata only
+
+
 def main():
     src_dir = Path(__file__).resolve().parent
     ml_dir = src_dir.parent
@@ -37,7 +40,8 @@ def main():
 
     model = MOKEModel(
         num_metadata_features=num_metadata_features,
-        num_classes=num_classes
+        num_classes=num_classes,
+        use_images=USE_IMAGES
     ).to(device)
 
     loss_fn = nn.CrossEntropyLoss()
@@ -108,6 +112,7 @@ def main():
                     "grade_names": dataset.grade_names,
                     "num_metadata_features": num_metadata_features,
                     "num_classes": num_classes,
+                    "use_images": USE_IMAGES,
                 },
                 save_path
             )

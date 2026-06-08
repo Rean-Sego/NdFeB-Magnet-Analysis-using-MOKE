@@ -34,7 +34,7 @@ RASTER_SAVE_OVERLAY = True
 RASTER_SAVE_COORDS = True
 
 DWCLOSURE = 0.57
-DWSTRIPE = 2.16
+DWSTRIPE = 2.72
 ALIGNMENT_THRESHOLD = 95  # Percentage alignment threshold for "aligned" classification
 
  #---Individual line removal thresholds.

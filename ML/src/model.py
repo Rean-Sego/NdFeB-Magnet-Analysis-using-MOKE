@@ -6,14 +6,19 @@ from torchvision import models
 
 
 class MOKEModel(nn.Module):
-    def __init__(self, num_metadata_features: int, num_classes: int):
+    def __init__(self, num_metadata_features: int, num_classes: int, use_images: bool = True):
         super().__init__()
 
-        # Image branch: LC + HC + MOKE as 3-channel input
-        self.cnn = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
-        self.cnn.fc = nn.Identity()  # ResNet18 outputs 512 features
+        self.use_images = use_images
 
-        # Metadata branch
+        if self.use_images:
+            self.cnn = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+            self.cnn.fc = nn.Identity()
+            image_feature_size = 512
+        else:
+            self.cnn = None
+            image_feature_size = 0
+
         self.meta_mlp = nn.Sequential(
             nn.Linear(num_metadata_features, 32),
             nn.ReLU(),
@@ -21,17 +26,19 @@ class MOKEModel(nn.Module):
             nn.ReLU()
         )
 
-        # Combined classifier
         self.final = nn.Sequential(
-            nn.Linear(512 + 32, 64),
+            nn.Linear(image_feature_size + 32, 64),
             nn.ReLU(),
             nn.Linear(64, num_classes)
         )
 
     def forward(self, image, metadata):
-        image_features = self.cnn(image)
         meta_features = self.meta_mlp(metadata)
 
-        combined = torch.cat([image_features, meta_features], dim=1)
+        if self.use_images:
+            image_features = self.cnn(image)
+            combined = torch.cat([image_features, meta_features], dim=1)
+        else:
+            combined = meta_features
 
         return self.final(combined)

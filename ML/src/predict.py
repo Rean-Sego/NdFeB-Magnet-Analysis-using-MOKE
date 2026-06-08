@@ -25,9 +25,12 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    use_images = checkpoint.get("use_images", True)
+
     model = MOKEModel(
         num_metadata_features=checkpoint["num_metadata_features"],
-        num_classes=checkpoint["num_classes"]
+        num_classes=checkpoint["num_classes"],
+        use_images=use_images
     ).to(device)
 
     model.load_state_dict(checkpoint["model_state_dict"])
