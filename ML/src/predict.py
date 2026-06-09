@@ -18,14 +18,18 @@ def main():
     predict_csv = ml_dir / "inputs" / "metadata" / "metadata_predict.csv"
 
     checkpoint = torch.load(model_path, map_location="cpu")
+    use_images = checkpoint.get("use_images", True)
 
-    dataset = MOKEDataset(csv_name="metadata_predict.csv")
+    dataset = MOKEDataset(
+        csv_name="metadata_predict.csv",
+        use_images=use_images
+    )
     print(predict_csv)
     print(predict_csv.exists())
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    use_images = checkpoint.get("use_images", True)
+
 
     model = MOKEModel(
         num_metadata_features=checkpoint["num_metadata_features"],

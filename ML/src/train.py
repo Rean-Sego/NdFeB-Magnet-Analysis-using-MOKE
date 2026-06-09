@@ -19,7 +19,7 @@ def main():
     models_dir = ml_dir / "models"
     models_dir.mkdir(exist_ok=True)
 
-    dataset = MOKEDataset()
+    dataset = MOKEDataset(use_images=USE_IMAGES)
 
     train_size = int(0.8 * len(dataset))
     val_size = len(dataset) - train_size

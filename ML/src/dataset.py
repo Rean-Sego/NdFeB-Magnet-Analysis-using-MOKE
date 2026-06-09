@@ -10,8 +10,10 @@ from torchvision import transforms
 
 
 class MOKEDataset(Dataset):
-    def __init__(self, csv_name="metadata.csv"):
+    def __init__(self, csv_name="metadata.csv", use_images=True):
         super().__init__()
+
+        self.use_images = use_images
 
         src_dir = Path(__file__).resolve().parent
         ml_dir = src_dir.parent
@@ -50,18 +52,21 @@ class MOKEDataset(Dataset):
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
+        
+        if self.use_images:
+            channels = []
 
-        channels = []
+            for col in self.image_cols:
+                img_path = self.img_dir / row[col]
 
-        for col in self.image_cols:
-            img_path = self.img_dir / row[col]
+                img = Image.open(img_path).convert("L")
+                img = self.transform(img)
 
-            img = Image.open(img_path).convert("L")
-            img = self.transform(img)  # shape: [1, 224, 224]
+                channels.append(img)
 
-            channels.append(img)
-
-        image = torch.cat(channels, dim=0)  # shape: [3, 224, 224]
+            image = torch.cat(channels, dim=0)
+        else:
+            image = torch.empty(0)
 
         metadata_values = row[self.metadata_cols].astype(float).values
         metadata = torch.tensor(metadata_values, dtype=torch.float32)
