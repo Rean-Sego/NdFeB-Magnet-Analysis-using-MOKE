@@ -33,8 +33,8 @@ RASTER_PX_LEN_RATIO = 41.56   # px / um
 RASTER_SAVE_OVERLAY = True
 RASTER_SAVE_COORDS = True
 
-DWCLOSURE = 0.57
-DWSTRIPE = 2.72
+DWCLOSURE = 0.61
+DWSTRIPE = 2.21
 ALIGNMENT_THRESHOLD = 95  # Percentage alignment threshold for "aligned" classification
 
  #---Individual line removal thresholds.
@@ -296,7 +296,7 @@ all_avg_domain_widths = []
 all_alignment_pcts = []
 #--End
 batch_rows = []
-
+histogram_rows = []
 
 for npy_file in npy_files:
     sample_base = npy_file.replace("_P.npy", "")
@@ -454,6 +454,32 @@ for npy_file in npy_files:
         binary_name = f"{grain_file_base}_binary.png"
         cv2.imwrite(os.path.join(sample_rast_folder, binary_name), binary)
 
+        # --------------------------------------
+        # FULL RASTER LINES ON BINARY (QC ONLY)
+        # --------------------------------------
+
+        full_mask = np.full_like(binary, 255, dtype=np.uint8)
+
+        full_raster = build_raster_mask(
+            mask_u8_small if False else cropped_mask,
+            directions=RASTER_DIRECTIONS,
+            spacing=RASTER_SPACING_PX,
+            line_width=RASTER_LINE_WIDTH_PX
+        )
+
+        full_overlay = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+        full_overlay[full_raster > 0] = (0, 0, 255)
+
+        full_overlay_name = f"{grain_file_base}_binary_full_raster.png"
+        cv2.imwrite(
+            os.path.join(sample_rast_folder, full_overlay_name),
+            full_overlay
+        )
+
+
+
+
+
         white_fraction = np.mean(binary[mask_bool] == 255)
         black_fraction = np.mean(binary[mask_bool] == 0)
 
@@ -512,7 +538,7 @@ for npy_file in npy_files:
 
         # overlay raster on binary image
         binary_overlay = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
-        binary_overlay[raster_binary > 0] = (255, 0, 0)
+        binary_overlay[raster_binary > 0] = (0, 0, 255)
 
         binary_overlay_name = f"{grain_file_base}_binary_raster_overlay.png"
         cv2.imwrite(os.path.join(sample_rast_folder, binary_overlay_name), binary_overlay)
@@ -642,6 +668,39 @@ for npy_file in npy_files:
         plt.savefig(os.path.join(sample_rast_folder, qc_name))
         plt.close()
 
+# --------------------------------------
+# SAVE RAW HISTOGRAM DATA FOR ORIGIN
+# --------------------------------------
+
+        original_hist, _ = np.histogram(
+            original_pixels,
+            bins=256,
+            range=(0, 256)
+        )
+
+        contrast_hist, _ = np.histogram(
+            contrast_pixels,
+            bins=256,
+            range=(0, 256)
+        )
+
+        blur_hist, _ = np.histogram(
+            blur_pixels,
+            bins=256,
+            range=(0, 256)
+        )
+
+        for intensity in range(256):
+            histogram_rows.append({
+                "sample_base": sample_base,
+                "grain_id": grain_file_base,
+                "intensity": intensity,
+                "original_count": original_hist[intensity],
+                "contrast_count": contrast_hist[intensity],
+                "blur_count": blur_hist[intensity],
+                "threshold": threshold
+            })
+
 
         # --------------------------------------
         # HISTOGRAM QC PANEL
@@ -697,7 +756,7 @@ for npy_file in npy_files:
         fig, ax = plt.subplots(figsize=(14, 14))
 
         ax.imshow(cv2.cvtColor(polar_img, cv2.COLOR_BGR2RGB))
-        im = ax.imshow(heatmap_width, cmap="jet", alpha=0.5, vmin=w_min, vmax=w_max)
+        im = ax.imshow(heatmap_width, cmap="coolwarm", alpha=0.5, vmin=w_min, vmax=w_max)
         ax.set_facecolor("black") #Remove if you want to overlay original image
         ax.axis("off")
         cbar = plt.colorbar(im, ax=ax, orientation="horizontal", fraction=0.05, pad=0.02)
@@ -894,3 +953,31 @@ with open(master_path, "w") as f:
 
     for row in batch_rows:
         f.write(",".join(str(row.get(col, "")) for col in batch_columns) + "\n")
+
+# ==========================================
+# SAVE RAW HISTOGRAM QC DATA
+# ==========================================
+
+histogram_csv_path = os.path.join(
+    RAST_FOLDER,
+    "histogram_qc_data.csv"
+)
+
+histogram_columns = [
+    "sample_base",
+    "grain_id",
+    "intensity",
+    "original_count",
+    "contrast_count",
+    "blur_count",
+    "threshold"
+]
+
+with open(histogram_csv_path, "w") as f:
+    f.write(",".join(histogram_columns) + "\n")
+
+    for row in histogram_rows:
+        f.write(
+            ",".join(str(row[column]) for column in histogram_columns)
+            + "\n"
+        )

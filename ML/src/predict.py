@@ -57,11 +57,16 @@ def main():
 
             uid = dataset.df.iloc[i]["uid"]
 
-            results.append({
+            result = {
                 "uid": uid,
                 "predicted_grade": pred_grade,
                 "confidence": confidence.item()
-            })
+            }
+
+            for grade, probability in zip(checkpoint["grade_names"], probabilities[0]):
+                result[f"prob_{grade}"] = probability.item()
+
+            results.append(result)
 
             print(f"{uid} → {pred_grade} | confidence = {confidence.item():.4f}")
 

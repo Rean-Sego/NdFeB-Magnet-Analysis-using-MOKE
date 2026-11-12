@@ -16,7 +16,7 @@ from skimage import exposure
 # ==========================================
 # --- CONFIGURATION ---
 # ==========================================
-MICRONS_PER_PIXEL = 0.066  
+MICRONS_PER_PIXEL = 0.066  ##Ignore. This was meant for an interactive grain selecting thing
 ALIGNMENT_THRESHOLD_DEG = 15.0 
 SCALE_BAR_HEIGHT = 180  #How much of the bottom of the image is cropped
 STRUCT_MODE = "HC"   # "LC" or "HC"
@@ -35,7 +35,7 @@ OBJECT_MASK_FOLDER = os.path.join(OUTPUTS_FOLDER, "object_mask")
 VISUAL_OVERLAY_FOLDER = os.path.join(OUTPUTS_FOLDER, "visual_overlay")
 
 TEST_FOLDER = "data/test_samples"
-SC_FOLDER = "sc_results"
+
 
 
 
@@ -384,7 +384,7 @@ if __name__ == "__main__":
     os.makedirs(IMAGE_FOLDER, exist_ok=True)
     os.makedirs(OBJECT_MASK_FOLDER, exist_ok=True)
     os.makedirs(VISUAL_OVERLAY_FOLDER, exist_ok=True)
-    os.makedirs(SC_FOLDER, exist_ok=True)
+
 
 
     seg = GrainSegmenter()

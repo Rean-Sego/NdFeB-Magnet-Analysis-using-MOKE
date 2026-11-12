@@ -10,7 +10,7 @@ from dataset import MOKEDataset
 from model import MOKEModel
 
 
-USE_IMAGES = False   # True = use images + metadata, False = metadata only
+USE_IMAGES = True   # True = use images + metadata, False = metadata only
 
 
 def main():
